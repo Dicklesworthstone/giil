@@ -72,7 +72,7 @@ get_shell_config() {
 add_to_path() {
     local install_dir="$1"
     local shell_config="$2"
-    local path_line="export PATH=\"${install_dir}:\$PATH\""
+    local shell_name=$(basename "${SHELL:-/bin/bash}")
 
     # Check if already in PATH
     if [[ ":$PATH:" == *":${install_dir}:"* ]]; then
@@ -84,6 +84,20 @@ add_to_path() {
     if [[ -f "$shell_config" ]] && grep -qF "$install_dir" "$shell_config" 2>/dev/null; then
         log_info "PATH entry already in $shell_config"
         return 0
+    fi
+
+    # Ensure config directory exists (important for fish)
+    local config_dir=$(dirname "$shell_config")
+    if [[ ! -d "$config_dir" ]]; then
+        mkdir -p "$config_dir"
+    fi
+
+    # Generate shell-appropriate PATH addition
+    local path_line
+    if [[ "$shell_name" == "fish" ]]; then
+        path_line="fish_add_path ${install_dir}"
+    else
+        path_line="export PATH=\"${install_dir}:\$PATH\""
     fi
 
     # Add to config
