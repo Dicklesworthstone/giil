@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run ShellCheck on giil
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: '.'
+          severity: warning
+          # SC2155: Declare and assign separately - too noisy for this codebase
+          # SC2034: Unused variables - some are used in heredocs
+          ignore_paths: node_modules
+        env:
+          SHELLCHECK_OPTS: -e SC2155 -e SC2034
+
+  syntax-check:
+    name: Syntax Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate bash syntax - giil
+        run: bash -n giil
+
+      - name: Validate bash syntax - install.sh
+        run: bash -n install.sh
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Extract and validate embedded JavaScript
+        run: |
+          # Extract the extractor.mjs content from the heredoc
+          # The heredoc starts with: cat > "$script_path" << 'SCRIPT_EOF'
+          # and ends with: SCRIPT_EOF
+          sed -n "/cat > \"\\\$script_path\" << 'SCRIPT_EOF'/,/^SCRIPT_EOF$/p" giil | \
+            sed '1d;$d' > /tmp/extractor.mjs
+
+          # Validate JavaScript syntax
+          node --check /tmp/extractor.mjs
+          echo "✓ Embedded JavaScript syntax is valid"
+
+  install-test:
+    name: Installation Test
+    needs: [shellcheck, syntax-check]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run installer
+        run: |
+          # Install to a test directory
+          export DEST="${HOME}/.local/bin"
+          export GIIL_NO_ALIAS=1
+          bash install.sh
+
+      - name: Verify installation
+        run: |
+          # Check script exists and is executable
+          test -x "${HOME}/.local/bin/giil"
+          echo "✓ giil is installed and executable"
+
+      - name: Check version output
+        run: |
+          "${HOME}/.local/bin/giil" --version
+
+      - name: Check help output
+        run: |
+          "${HOME}/.local/bin/giil" --help | head -20
+
+  version-consistency:
+    name: Version Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check VERSION file exists
+        run: |
+          if [[ ! -f VERSION ]]; then
+            echo "::warning::VERSION file not found"
+            exit 0
+          fi
+
+      - name: Verify version matches
+        run: |
+          if [[ ! -f VERSION ]]; then
+            exit 0
+          fi
+
+          FILE_VERSION=$(cat VERSION)
+          SCRIPT_VERSION=$(grep -m1 '^VERSION=' giil | cut -d'"' -f2)
+
+          if [[ "$FILE_VERSION" != "$SCRIPT_VERSION" ]]; then
+            echo "::error::VERSION file ($FILE_VERSION) does not match giil script ($SCRIPT_VERSION)"
+            exit 1
+          fi
+
+          echo "✓ Versions are consistent: $FILE_VERSION"

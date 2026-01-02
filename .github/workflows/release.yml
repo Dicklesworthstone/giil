@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release with Checksums
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Releasing version: $VERSION"
+
+      - name: Verify script version matches tag
+        run: |
+          SCRIPT_VERSION=$(grep -m1 '^VERSION=' giil | cut -d'"' -f2)
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+
+          if [[ "$SCRIPT_VERSION" != "$TAG_VERSION" ]]; then
+            echo "::error::Script VERSION ($SCRIPT_VERSION) does not match tag ($TAG_VERSION)"
+            echo "Please update VERSION in giil before tagging"
+            exit 1
+          fi
+
+          echo "✓ Version check passed: $TAG_VERSION"
+
+      - name: Compute SHA256 checksums
+        run: |
+          echo "Computing checksums..."
+          sha256sum giil install.sh > checksums.sha256
+          cat checksums.sha256
+
+      - name: Compute individual checksum files
+        run: |
+          sha256sum giil | awk '{print $1}' > giil.sha256
+          sha256sum install.sh | awk '{print $1}' > install.sh.sha256
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          cat << 'EOF' > release_notes.md
+          ## Installation
+
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/get_icloud_image_link/main/install.sh | bash
+          ```
+
+          ## Verify Installation (Optional)
+
+          After downloading, you can verify the checksums:
+
+          ```bash
+          # Verify giil script
+          echo "$(curl -fsSL https://github.com/Dicklesworthstone/get_icloud_image_link/releases/download/v${{ steps.version.outputs.version }}/giil.sha256)  giil" | sha256sum -c -
+          ```
+
+          ## Checksums
+
+          SHA256 checksums for this release are attached as `checksums.sha256`.
+
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: giil v${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          files: |
+            giil
+            install.sh
+            checksums.sha256
+            giil.sha256
+            install.sh.sha256
+          generate_release_notes: true
+          append_body: true
+
+  update-version-file:
+    name: Update VERSION file
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update VERSION file
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "$VERSION" > VERSION
+          echo "Updated VERSION to: $VERSION"
+
+      - name: Commit and push VERSION
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add VERSION
+
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "VERSION file already up to date"
+          else
+            git commit -m "chore: update VERSION to ${GITHUB_REF#refs/tags/v} [skip ci]"
+            git push
+          fi
