@@ -35,12 +35,8 @@ test_json_mode() {
     log_info "Testing: --json mode output structure..."
 
     local output_file="$E2E_OUTPUT_DIR/json_test.json"
-    local exit_code=0
-
     # Run giil with --json and capture output
-    if ! "$E2E_GIIL_BIN" "$TEST_URL" --json --output "$E2E_OUTPUT_DIR" --timeout 120 > "$output_file" 2>/dev/null; then
-        exit_code=$?
-    fi
+    "$E2E_GIIL_BIN" "$TEST_URL" --json --output "$E2E_OUTPUT_DIR" --timeout 120 > "$output_file" 2>/dev/null || true
 
     # Check if we got valid JSON output
     if [[ ! -s "$output_file" ]]; then
@@ -196,8 +192,6 @@ test_preserve_mode() {
 
     log_info "Testing: --preserve mode (skip compression)..."
 
-    local output_normal="$E2E_OUTPUT_DIR/normal.jpg"
-    local output_preserve="$E2E_OUTPUT_DIR/preserve.jpg"
     local json_normal="$E2E_OUTPUT_DIR/normal.json"
     local json_preserve="$E2E_OUTPUT_DIR/preserve.json"
 
