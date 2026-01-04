@@ -15,6 +15,12 @@ setup() {
 
     # Extract normalize_dropbox_url function
     eval "$(sed -n '/^normalize_dropbox_url() {$/,/^}$/p' "$GIIL_SCRIPT")"
+
+    # Extract version_gt function
+    eval "$(sed -n '/^version_gt() {$/,/^}$/p' "$GIIL_SCRIPT")"
+
+    # Extract detect_os function
+    eval "$(sed -n '/^detect_os() {$/,/^}$/p' "$GIIL_SCRIPT")"
 }
 
 # ============================================================================
@@ -128,4 +134,50 @@ setup() {
     input="https://www.dropbox.com/s/long-hash-123/my-photo-file.jpg"
     result="$(normalize_dropbox_url "$input")"
     [[ "$result" == "$input"* ]]
+}
+
+# ============================================================================
+# version_gt tests
+# ============================================================================
+
+@test "version_gt: 2.0.0 > 1.0.0" {
+    version_gt "2.0.0" "1.0.0"
+}
+
+@test "version_gt: 1.1.0 > 1.0.0" {
+    version_gt "1.1.0" "1.0.0"
+}
+
+@test "version_gt: 1.0.1 > 1.0.0" {
+    version_gt "1.0.1" "1.0.0"
+}
+
+@test "version_gt: 10.0.0 > 9.0.0" {
+    version_gt "10.0.0" "9.0.0"
+}
+
+@test "version_gt: 1.0.0 is NOT > 1.0.0 (equal)" {
+    ! version_gt "1.0.0" "1.0.0"
+}
+
+@test "version_gt: 1.0.0 is NOT > 2.0.0" {
+    ! version_gt "1.0.0" "2.0.0"
+}
+
+@test "version_gt: 3.0.0 > 2.9.9" {
+    version_gt "3.0.0" "2.9.9"
+}
+
+# ============================================================================
+# detect_os tests
+# ============================================================================
+
+@test "detect_os: returns macos, linux, or unknown" {
+    result="$(detect_os)"
+    [[ "$result" == "macos" || "$result" == "linux" || "$result" == "unknown" ]]
+}
+
+@test "detect_os: output is a single word" {
+    result="$(detect_os)"
+    [[ "$result" =~ ^[a-z]+$ ]]
 }
