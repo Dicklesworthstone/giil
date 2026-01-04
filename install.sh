@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # giil installer
-# Downloads and installs giil (Get iCloud Image Link) to your system
+# Downloads and installs giil (Get Image [from] Internet Link) to your system
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/giil/main/install.sh | bash

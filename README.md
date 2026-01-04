@@ -6,10 +6,10 @@
 </p>
 
 <h1 align="center">giil</h1>
-<h3 align="center">Get iCloud Image Link</h3>
+<h3 align="center">Get Image [from] Internet Link</h3>
 
 <p align="center">
-  <strong>A zero-setup CLI that downloads full-resolution images from iCloud photo shares</strong>
+  <strong>A zero-setup CLI that downloads full-resolution images from cloud photo shares</strong>
 </p>
 
 <p align="center">
@@ -1613,7 +1613,7 @@ giil integrates with [gum](https://github.com/charmbracelet/gum) for beautiful t
 │                                                                   │
 │   ╔════════════════════════════════════════════════════════════╗ │
 │   ║                           giil                              ║ │
-│   ║               Get iCloud Image Link v3.0.0                  ║ │
+│   ║          Get Image [from] Internet Link v3.0.0              ║ │
 │   ╚════════════════════════════════════════════════════════════╝ │
 │                                                                   │
 │   ◐ Launching browser...                                          │

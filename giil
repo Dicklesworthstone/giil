@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# giil - Get iCloud Image Link (Hybrid Edition v3.0)
-# Downloads images from iCloud photo shares with maximum reliability
+# giil - Get Image [from] Internet Link (v3.0)
+# Downloads images from cloud sharing services (iCloud, Dropbox, Google Photos, Google Drive)
 #
 # FEATURES:
 #   - Primary: Click Download button (direct file acquisition)
