@@ -14,14 +14,28 @@ total_passed=0
 total_failed=0
 start_time=$SECONDS
 
-# Run unit tests
-log_section "Unit Tests"
+# Run JavaScript unit tests
+log_section "JavaScript Unit Tests"
 if node --test "$SCRIPT_DIR"/*.test.mjs; then
-    log_pass "All unit tests passed"
+    log_pass "All JavaScript unit tests passed"
     ((total_passed+=1))
 else
-    log_fail "Some unit tests failed"
+    log_fail "Some JavaScript unit tests failed"
     ((total_failed+=1))
+fi
+
+# Run Bash unit tests if bats is available
+if command -v bats &> /dev/null && compgen -G "$SCRIPT_DIR/bash/*.bats" > /dev/null 2>&1; then
+    log_section "Bash Unit Tests"
+    if bats "$SCRIPT_DIR"/bash/*.bats; then
+        log_pass "All Bash unit tests passed"
+        ((total_passed+=1))
+    else
+        log_fail "Some Bash unit tests failed"
+        ((total_failed+=1))
+    fi
+else
+    log_info "Skipping Bash tests (bats not installed or no tests found)"
 fi
 
 # Run E2E tests if they exist
