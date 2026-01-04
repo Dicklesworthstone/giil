@@ -60,15 +60,14 @@ run_test() {
             log_test_result "$test_name" "pass" "$((duration * 1000))"
             ((passed++))
             ;;
+        77)
+            # Exit code 77 is standard "skipped" (used by autotools, bats, etc.)
+            log_test_result "$test_name" "skip" "$((duration * 1000))"
+            ((skipped++))
+            ;;
         *)
-            # Exit code 0 with "SKIP" in output means skipped (check last line)
-            if [[ $exit_code -eq 0 ]]; then
-                log_test_result "$test_name" "skip" "$((duration * 1000))"
-                ((skipped++))
-            else
-                log_test_result "$test_name" "fail" "$((duration * 1000))"
-                ((failed++))
-            fi
+            log_test_result "$test_name" "fail" "$((duration * 1000))"
+            ((failed++))
             ;;
     esac
 }

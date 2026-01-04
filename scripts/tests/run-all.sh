@@ -12,6 +12,7 @@ log_section "giil Test Suite"
 # Track overall results
 total_passed=0
 total_failed=0
+total_skipped=0
 start_time=$SECONDS
 
 # Run JavaScript unit tests
@@ -44,13 +45,23 @@ if compgen -G "$SCRIPT_DIR/e2e/*.test.sh" > /dev/null 2>&1; then
     for test in "$SCRIPT_DIR"/e2e/*.test.sh; do
         test_name=$(basename "$test")
         log_info "Running: $test_name"
-        if bash "$test"; then
-            log_pass "$test_name"
-            ((total_passed+=1))
-        else
-            log_fail "$test_name"
-            ((total_failed+=1))
-        fi
+        exit_code=0
+        bash "$test" || exit_code=$?
+        case $exit_code in
+            0)
+                log_pass "$test_name"
+                ((total_passed+=1))
+                ;;
+            77)
+                # Exit code 77 is standard "skipped" (used by autotools, bats, etc.)
+                log_info "$test_name (skipped)"
+                ((total_skipped+=1))
+                ;;
+            *)
+                log_fail "$test_name"
+                ((total_failed+=1))
+                ;;
+        esac
     done
 else
     log_info "No E2E tests found in $SCRIPT_DIR/e2e/"
@@ -59,6 +70,6 @@ fi
 # Summary
 duration=$((SECONDS - start_time))
 log_separator
-log_suite_summary "All Tests" "$total_passed" "$total_failed" 0 "$((duration * 1000))"
+log_suite_summary "All Tests" "$total_passed" "$total_failed" "$total_skipped" "$((duration * 1000))"
 
 exit $((total_failed > 0 ? 1 : 0))

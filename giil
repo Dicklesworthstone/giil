@@ -244,7 +244,7 @@ print_banner() {
             --margin "1 0" \
             --bold \
             "🍎 giil v${VERSION}" \
-            "Get iCloud Image Link"
+            "Get iCloud Image Link" >&2
     else
         echo -e "\n${BOLD}${MAGENTA}╔════════════════════════════════════╗${NC}" >&2
         echo -e "${BOLD}${MAGENTA}║${NC}  ${BOLD}🍎 giil v${VERSION}${NC}                    ${BOLD}${MAGENTA}║${NC}" >&2

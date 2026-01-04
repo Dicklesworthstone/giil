@@ -122,25 +122,9 @@ export function setCurrentPlatform(platform) {
 output += functionsOutput;
 
 // Add exports (setCurrentPlatform is already exported inline above)
-output += `// Exports for testing
-export {
-    ExitCodes,
-    detectPlatform,
-    validateContentType,
-    validateMagicBytes,
-    validateImageContent,
-    formatJsonSuccess,
-    formatJsonError,
-    errorCodeToExit,
-    extractGooglePhotosBaseUrl,
-    extractGoogleDriveFileId,
-    getGoogleDriveDownloadUrl,
-    getGoogleDriveViewerUrl,
-    formatDateForFilename,
-    formatDateForJson,
-    validateGoogleDriveResponse,
-    getExifDateTime
-};
-`;
+// Only export functions that were actually extracted
+if (extractedFunctions.length > 0) {
+    output += `// Exports for testing\nexport {\n    ${extractedFunctions.join(',\n    ')}\n};\n`;
+}
 
 console.log(output);

@@ -288,7 +288,10 @@ main() {
     if ! download_file "$download_url" "$tmp_file"; then
         if [[ -n "$fallback_url" ]]; then
             log_warn "Primary download failed; trying tag URL..."
-            download_file "$fallback_url" "$tmp_file"
+            if ! download_file "$fallback_url" "$tmp_file"; then
+                log_error "Failed to download giil from both primary and fallback URLs"
+                exit 1
+            fi
         else
             log_error "Failed to download giil"
             exit 1

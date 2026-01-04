@@ -215,10 +215,12 @@ e2e_assert_method() {
 }
 
 # Skip test with reason
+# Uses exit code 77 (standard "skipped" code used by autotools, bats, etc.)
 e2e_skip() {
     local reason="${1:-No reason given}"
     log_warn "SKIP: $reason"
-    exit 0
+    e2e_teardown
+    exit 77
 }
 
 # Check if URL is accessible (basic check)
