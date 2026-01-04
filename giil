@@ -35,6 +35,27 @@ set -euo pipefail
 
 VERSION="2.1.0"
 
+# -----------------------------------------------------------------------------
+# Exit Codes (v3.0+ extended scheme with backwards compatibility)
+# -----------------------------------------------------------------------------
+# BREAKING CHANGE in v3.0: Codes 4 and 5 moved to 10 and 11.
+# See hdm.1.4 for migration guidance.
+#
+# Local/usage errors (1-3): Same as v2
+# Reserved (4-9): For future local errors
+# Remote/content errors (10-19): Server-side failures
+# Internal errors (20+): Bugs in giil
+# -----------------------------------------------------------------------------
+readonly EXIT_SUCCESS=0           # Success
+readonly EXIT_CAPTURE_FAILURE=1   # All capture strategies failed
+readonly EXIT_USAGE_ERROR=2       # Bad CLI options or arguments
+readonly EXIT_DEPENDENCY_ERROR=3  # Node.js/Playwright/Sharp missing (unchanged from v2)
+readonly EXIT_NETWORK_ERROR=10    # Timeout, DNS, unreachable (was 4 in v2)
+readonly EXIT_AUTH_REQUIRED=11    # Login redirect, password required (was 5 in v2)
+readonly EXIT_NOT_FOUND=12        # Expired link, deleted, 404
+readonly EXIT_UNSUPPORTED_TYPE=13 # Video, Google Doc, unsupported content
+readonly EXIT_INTERNAL_ERROR=20   # Bug in giil (please report!)
+
 # Colors for output (fallback when gum not available)
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -365,6 +386,8 @@ QUALITY=85
 FORCE_UPDATE=false
 DEBUG_MODE=false
 TIMEOUT=60
+OPTIMIZE_MODE=false
+CONVERT_FORMAT=""
 URL=""
 
 # XDG-compliant cache directory
@@ -501,6 +524,66 @@ detect_os() {
 }
 
 # -----------------------------------------------------------------------------
+# Platform Detection (Cloud Service Identification)
+# -----------------------------------------------------------------------------
+# Detects which cloud service a URL belongs to.
+# Returns: icloud | dropbox | gphotos | gdrive | unknown
+#
+# URL patterns supported (v3.0+):
+#   iCloud:       share.icloud.com/photos/* | icloud.com/photos/*
+#   Dropbox:      dropbox.com/s/* | dropbox.com/scl/fi/* | dropbox.com/sh/*
+#   Google Photos: photos.app.goo.gl/* | photos.google.com/share/*
+#   Google Drive: drive.google.com/file/d/* | drive.google.com/open?id=*
+
+detect_platform() {
+    local url="$1"
+    case "$url" in
+        # iCloud photo shares (existing v2.x support)
+        *share.icloud.com/photos/* | *icloud.com/photos/*)
+            echo "icloud"
+            ;;
+        # Dropbox shared links (v3.0+)
+        *dropbox.com/s/* | *dropbox.com/scl/fi/* | *dropbox.com/sh/*)
+            echo "dropbox"
+            ;;
+        # Google Photos shared albums/photos (v3.0+)
+        *photos.app.goo.gl/* | *photos.google.com/share/*)
+            echo "gphotos"
+            ;;
+        # Google Drive file links (v3.0+ experimental)
+        *drive.google.com/file/d/* | *drive.google.com/open?id=*)
+            echo "gdrive"
+            ;;
+        *)
+            echo "unknown"
+            ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
+# URL Normalization (v3.0+ - platform-specific URL transformations)
+# -----------------------------------------------------------------------------
+
+# Normalize Dropbox share URL to direct download URL
+# Replaces dl=0|1 or raw=0|1 with raw=1 for direct binary access with correct MIME type
+normalize_dropbox_url() {
+    local url="$1"
+
+    # Remove existing dl= or raw= parameters
+    url=$(echo "$url" | sed -E 's/[&?](dl|raw)=[01]//g')
+
+    # Clean up any double && or trailing ?/& from removal
+    url=$(echo "$url" | sed -E 's/\?&/?/; s/&&/\&/g; s/[?&]$//')
+
+    # Add raw=1 parameter (raw=1 provides correct Content-Type, unlike dl=1)
+    if [[ "$url" == *"?"* ]]; then
+        echo "${url}&raw=1"
+    else
+        echo "${url}?raw=1"
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Dependency Management
 # -----------------------------------------------------------------------------
 
@@ -511,7 +594,7 @@ install_node_macos() {
     else
         log_error "Homebrew not found. Please install Node.js manually:"
         log_error "  https://nodejs.org/ or 'brew install node'"
-        exit 1
+        exit "$EXIT_DEPENDENCY_ERROR"
     fi
 }
 
@@ -532,7 +615,7 @@ install_node_linux() {
     else
         log_error "Could not detect package manager. Please install Node.js manually:"
         log_error "  https://nodejs.org/"
-        exit 1
+        exit "$EXIT_DEPENDENCY_ERROR"
     fi
 }
 
@@ -546,7 +629,7 @@ ensure_node() {
             linux) install_node_linux ;;
             *)
                 log_error "Unsupported OS. Please install Node.js manually."
-                exit 1
+                exit "$EXIT_DEPENDENCY_ERROR"
                 ;;
         esac
     fi
@@ -675,7 +758,7 @@ PACKAGE_EOF
 
             if ! node -e "require('sharp')" >/dev/null 2>&1; then
                 log_error "Sharp failed to install. Try reinstalling dependencies or set GIIL_HOME to a writable path."
-                exit 1
+                exit "$EXIT_DEPENDENCY_ERROR"
             fi
         fi
 
@@ -689,12 +772,12 @@ PACKAGE_EOF
                 npx playwright install --with-deps chromium 2>&1 | sed '/^$/d' || {
                     log_error "Failed to install Chromium. Try manually:"
                     log_error "  npx playwright install --with-deps chromium"
-                    exit 1
+                    exit "$EXIT_DEPENDENCY_ERROR"
                 }
             else
                 log_error "Failed to install Chromium. Try manually:"
                 log_error "  npx playwright install chromium"
-                exit 1
+                exit "$EXIT_DEPENDENCY_ERROR"
             fi
         }
 
@@ -720,6 +803,79 @@ import { writeFileSync, readFileSync, existsSync, unlinkSync } from 'fs';
 import { join, basename } from 'path';
 import { execFileSync } from 'child_process';
 
+// -----------------------------------------------------------------------------
+// Exit Codes (v3.0+ - must match bash layer)
+// -----------------------------------------------------------------------------
+const ExitCodes = {
+    SUCCESS: 0,           // Success
+    CAPTURE_FAILURE: 1,   // All capture strategies failed
+    USAGE_ERROR: 2,       // Bad CLI options
+    DEPENDENCY_ERROR: 3,  // Node.js/Playwright missing
+    NETWORK_ERROR: 10,    // Timeout, DNS, unreachable
+    AUTH_REQUIRED: 11,    // Login redirect, password required
+    NOT_FOUND: 12,        // Expired link, deleted, 404
+    UNSUPPORTED_TYPE: 13, // Video, Google Doc
+    INTERNAL_ERROR: 20    // Bug in giil
+};
+
+// -----------------------------------------------------------------------------
+// Rate Limiting (v3.0+ - polite delays for album downloads)
+// -----------------------------------------------------------------------------
+const ALBUM_DELAY_MS = 1000;        // 1 second between photos in album mode
+const RATE_LIMIT_BACKOFF_BASE = 2;  // Base for exponential backoff (2^retries seconds)
+const MAX_RETRIES = 3;              // Max retries for rate-limited requests
+
+// =============================================================================
+// Platform Adapter Interface (v3.0+ - JSDoc for type hints)
+// =============================================================================
+// These typedefs define the contract that all platform adapters must implement.
+// Using JSDoc instead of TypeScript avoids build complexity for embedded script.
+
+/**
+ * A resolved item from a URL (single image or album entry)
+ * @typedef {Object} ResolvedItem
+ * @property {string} url - The original or normalized URL
+ * @property {string} [directUrl] - Direct download URL if available (bypasses browser)
+ * @property {string} [filename] - Suggested filename from URL/headers
+ * @property {number} [index] - Position in album (for --all mode)
+ */
+
+/**
+ * Result from acquiring image bytes
+ * @typedef {Object} AcquireResult
+ * @property {Buffer} bytes - The raw image data
+ * @property {string} mime - MIME type (image/jpeg, image/png, etc.)
+ * @property {string} platform - Platform identifier (icloud, dropbox, gphotos, gdrive)
+ * @property {string} method - Capture method used (download, network, element-screenshot, viewport-screenshot)
+ * @property {number} tier - Strategy tier (1=download, 2=network, 3=element, 4=viewport)
+ * @property {string} [sourceUrl] - CDN URL where image was obtained
+ * @property {boolean} [isPreview] - True if this is preview quality (not full resolution)
+ * @property {number} [width] - Image width in pixels
+ * @property {number} [height] - Image height in pixels
+ */
+
+/**
+ * Context passed to acquire functions
+ * @typedef {Object} AcquireContext
+ * @property {import('playwright').Page} page - Playwright page instance
+ * @property {import('playwright').BrowserContext} context - Browser context
+ * @property {number} timeout - Timeout in milliseconds
+ * @property {boolean} debug - Whether debug mode is enabled
+ * @property {string} outputDir - Output directory for saved files
+ * @property {number} quality - JPEG quality (1-100)
+ */
+
+/**
+ * Platform adapter interface - all platform handlers must implement this
+ * @typedef {Object} PlatformAdapter
+ * @property {'icloud'|'dropbox'|'gphotos'|'gdrive'} id - Platform identifier
+ * @property {(url: string) => boolean} match - Test if URL belongs to this platform
+ * @property {(url: string) => string} normalize - Normalize URL to canonical form
+ * @property {(url: string, opts: {all: boolean}) => Promise<ResolvedItem[]>} resolveItems - Resolve URL to downloadable items
+ * @property {(item: ResolvedItem, ctx: AcquireContext) => Promise<AcquireResult>} acquire - Acquire image bytes for an item
+ * @property {boolean} [requiresBrowser] - True if platform needs Playwright (false for direct downloads like Dropbox)
+ */
+
 // Parse arguments
 const args = process.argv.slice(2);
 const url = args[0];
@@ -733,7 +889,7 @@ const allMode = args[7] === 'true';
 
 if (!url) {
     console.error('Usage: node extractor.mjs <url> <outputDir> <quality> <base64> <debug> <timeout> <json> <all>');
-    process.exit(1);
+    process.exit(ExitCodes.USAGE_ERROR);
 }
 
 // Helper: sleep
@@ -750,6 +906,65 @@ function formatDateForFilename(date) {
 function formatDateForJson(date) {
     return date.toISOString();
 }
+
+// Helper: detect platform from URL (v3.0+)
+function detectPlatform(urlStr) {
+    const patterns = {
+        icloud: /(?:share\.)?icloud\.com\/photos/i,
+        dropbox: /dropbox\.com\/(?:s|scl\/fi|sh)\//i,
+        gphotos: /photos\.(?:app\.goo\.gl|google\.com\/share)/i,
+        gdrive: /(?:drive|docs)\.google\.com\/(?:file\/d|open\?id)/i
+    };
+
+    for (const [platform, regex] of Object.entries(patterns)) {
+        if (regex.test(urlStr)) return platform;
+    }
+    return 'unknown';
+}
+
+// Current platform (detected from input URL)
+const currentPlatform = detectPlatform(url);
+
+// v3 JSON Schema Helper: format success output
+// Wraps all output with schema_version, ok, and platform fields
+function formatJsonSuccess(data) {
+    return {
+        schema_version: '1',
+        ok: true,
+        platform: currentPlatform,
+        ...data
+    };
+}
+
+// v3 JSON Schema Helper: format error output
+function formatJsonError(code, message, remediation = null) {
+    const result = {
+        schema_version: '1',
+        ok: false,
+        platform: currentPlatform,
+        error: {
+            code: code,
+            message: message
+        }
+    };
+    if (remediation) {
+        result.error.remediation = remediation;
+    }
+    return result;
+}
+
+// Error code to exit code mapping
+const errorCodeToExit = {
+    'CAPTURE_FAILURE': ExitCodes.CAPTURE_FAILURE,
+    'USAGE_ERROR': ExitCodes.USAGE_ERROR,
+    'NETWORK_ERROR': ExitCodes.NETWORK_ERROR,
+    'AUTH_REQUIRED': ExitCodes.AUTH_REQUIRED,
+    'NOT_FOUND': ExitCodes.NOT_FOUND,
+    'UNSUPPORTED_TYPE': ExitCodes.UNSUPPORTED_TYPE,
+    'INTERNAL_ERROR': ExitCodes.INTERNAL_ERROR,
+    'CONTENT_TYPE_HTML': ExitCodes.AUTH_REQUIRED,
+    'MAGIC_BYTES_HTML': ExitCodes.AUTH_REQUIRED
+};
 
 // Helper: extract EXIF datetime from buffer
 async function getExifDateTime(buffer) {
@@ -785,6 +1000,133 @@ function convertHeicWithSystemTools(inputPath, outputPath) {
         // System tool not available or failed
     }
     return false;
+}
+
+// -----------------------------------------------------------------------------
+// Content Validation (v3.0+ - detect HTML error pages masquerading as images)
+// -----------------------------------------------------------------------------
+
+// Validate Content-Type header from HTTP response
+// Returns: { valid: boolean, contentType: string, isHtml: boolean }
+function validateContentType(contentType) {
+    const normalizedType = (contentType || '').toLowerCase();
+
+    const validImageTypes = [
+        'image/jpeg', 'image/png', 'image/gif',
+        'image/webp', 'image/heic', 'image/heif',
+        'image/tiff', 'image/bmp',
+        'application/octet-stream'  // Some CDNs use this for binary files
+    ];
+
+    // Explicit HTML detection - this is an error page
+    const isHtml = normalizedType.includes('text/html') ||
+                   normalizedType.includes('application/xhtml');
+
+    if (isHtml) {
+        return { valid: false, contentType: normalizedType, isHtml: true };
+    }
+
+    const valid = validImageTypes.some(t => normalizedType.includes(t));
+    return { valid, contentType: normalizedType, isHtml: false };
+}
+
+// Validate magic bytes (file signature) to detect actual content type
+// Returns: { format: string, isHtml: boolean, isImage: boolean }
+function validateMagicBytes(buffer) {
+    if (!buffer || buffer.length < 12) {
+        return { format: 'unknown', isHtml: false, isImage: false };
+    }
+
+    const head = buffer.slice(0, 12);
+
+    // JPEG: FF D8 FF
+    if (head[0] === 0xFF && head[1] === 0xD8 && head[2] === 0xFF) {
+        return { format: 'jpeg', isHtml: false, isImage: true };
+    }
+
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if (head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4E && head[3] === 0x47) {
+        return { format: 'png', isHtml: false, isImage: true };
+    }
+
+    // GIF: 47 49 46 38 (GIF8)
+    if (head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x38) {
+        return { format: 'gif', isHtml: false, isImage: true };
+    }
+
+    // WebP: RIFF....WEBP
+    if (head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46) {
+        // Check for WEBP at offset 8
+        if (buffer.length >= 12 &&
+            head[8] === 0x57 && head[9] === 0x45 && head[10] === 0x42 && head[11] === 0x50) {
+            return { format: 'webp', isHtml: false, isImage: true };
+        }
+    }
+
+    // HEIC/HEIF: ftyp box - starts with size (4 bytes) + "ftyp"
+    if (buffer.length >= 12 &&
+        head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70) {
+        // Check for heic, mif1, msf1, or other HEIF brands
+        const brand = buffer.slice(8, 12).toString('ascii');
+        if (['heic', 'heix', 'mif1', 'msf1', 'hevc'].includes(brand)) {
+            return { format: 'heic', isHtml: false, isImage: true };
+        }
+    }
+
+    // BMP: 42 4D (BM)
+    if (head[0] === 0x42 && head[1] === 0x4D) {
+        return { format: 'bmp', isHtml: false, isImage: true };
+    }
+
+    // TIFF: 49 49 2A 00 (little endian) or 4D 4D 00 2A (big endian)
+    if ((head[0] === 0x49 && head[1] === 0x49 && head[2] === 0x2A && head[3] === 0x00) ||
+        (head[0] === 0x4D && head[1] === 0x4D && head[2] === 0x00 && head[3] === 0x2A)) {
+        return { format: 'tiff', isHtml: false, isImage: true };
+    }
+
+    // HTML detection: check for < or whitespace+< at start
+    // Convert first bytes to string and check for HTML patterns
+    const strHead = head.toString('utf8').trim().toLowerCase();
+    if (strHead.startsWith('<!doctype') || strHead.startsWith('<html') ||
+        strHead.startsWith('<?xml') || strHead.startsWith('<')) {
+        return { format: 'html', isHtml: true, isImage: false };
+    }
+
+    // Unknown format - could still be valid (some formats not recognized)
+    return { format: 'unknown', isHtml: false, isImage: false };
+}
+
+// Combined validation: checks both content-type and magic bytes
+// Throws descriptive error if content is HTML (error page)
+function validateImageContent(buffer, contentType = null, debugMode = false) {
+    // Layer 1: Content-Type header (if available)
+    if (contentType) {
+        const ctResult = validateContentType(contentType);
+        if (ctResult.isHtml) {
+            const error = new Error('CONTENT_TYPE_HTML: Server returned HTML instead of image (likely error page or login form)');
+            error.code = 'CONTENT_TYPE_HTML';
+            error.exitCode = 11;  // AUTH_REQUIRED
+            throw error;
+        }
+        if (debugMode && !ctResult.valid) {
+            console.error(`[giil:debug] Unexpected Content-Type: ${ctResult.contentType}`);
+        }
+    }
+
+    // Layer 2: Magic bytes verification
+    const magicResult = validateMagicBytes(buffer);
+    if (magicResult.isHtml) {
+        const error = new Error('MAGIC_BYTES_HTML: Content is HTML, not an image (likely error page or login form)');
+        error.code = 'MAGIC_BYTES_HTML';
+        error.exitCode = 11;  // AUTH_REQUIRED
+        throw error;
+    }
+
+    if (debugMode) {
+        console.error(`[giil:debug] Content validated: format=${magicResult.format}, isImage=${magicResult.isImage}`);
+    }
+
+    return magicResult;
 }
 
 // Helper: generate unique filename with counter if needed
@@ -878,32 +1220,36 @@ async function processAndSaveImage(buffer, options) {
         try { unlinkSync(downloadedFilePath); } catch (e) {}
     }
 
-    // Output based on mode
+    // Output based on mode (v3 JSON schema: includes schema_version, ok, platform)
     if (base64Output) {
-        const result = {
-            base64: processedBuffer.toString('base64'),
-            datetime: formatDateForJson(captureDate),
-            method: captureMethod
-        };
         if (jsonOutput) {
+            // v3 JSON format with schema_version, ok, platform
+            const result = formatJsonSuccess({
+                base64: processedBuffer.toString('base64'),
+                datetime: formatDateForJson(captureDate),
+                method: captureMethod,
+                ...(index !== undefined && { item_index: index })
+            });
             console.log(JSON.stringify(result));
         } else {
-            console.log(result.base64);
+            console.log(processedBuffer.toString('base64'));
         }
         console.error(`[giil] Output: base64 (${(processedBuffer.length / 1024).toFixed(1)} KB)`);
     } else {
         writeFileSync(outputPath, processedBuffer);
 
         if (jsonOutput) {
-            const result = {
+            // v3 JSON format with schema_version, ok, platform
+            const result = formatJsonSuccess({
                 path: outputPath,
                 datetime: formatDateForJson(captureDate),
                 sourceUrl: sourceUrl || url,
                 method: captureMethod,
                 size: processedBuffer.length,
                 width: metadata.width,
-                height: metadata.height
-            };
+                height: metadata.height,
+                ...(index !== undefined && { item_index: index })
+            });
             console.log(JSON.stringify(result));
         } else {
             console.log(outputPath);
@@ -1043,9 +1389,20 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
         captureMethod = 'viewport-screenshot';
     }
 
-    // Validate buffer
+    // Validate buffer size
     if (!finalBuffer || finalBuffer.length < 1000) {
         throw new Error('Failed to capture image - buffer too small or empty');
+    }
+
+    // Validate content (detect HTML error pages masquerading as images)
+    // Skip validation for screenshots (they are always valid PNG)
+    if (captureMethod !== 'element-screenshot' && captureMethod !== 'viewport-screenshot') {
+        try {
+            validateImageContent(finalBuffer, null, debugMode);
+        } catch (validationError) {
+            console.error(`[giil] Content validation failed: ${validationError.message}`);
+            throw validationError;
+        }
     }
 
     // Process and save
@@ -1067,7 +1424,8 @@ function createImageCaptureHandler(debugMode) {
     const capture = {
         buffer: null,
         size: 0,
-        url: null
+        url: null,
+        contentType: null
     };
 
     const handler = async (response) => {
@@ -1090,9 +1448,24 @@ function createImageCaptureHandler(debugMode) {
                 (isPhotoFormat || hasImageExtension)) {
                 const buffer = await response.body();
                 if (buffer && buffer.length > capture.size) {
+                    // Validate content before caching (v3.0+)
+                    try {
+                        const validation = validateMagicBytes(buffer);
+                        if (validation.isHtml) {
+                            if (debugMode) {
+                                console.error(`[giil:debug] Rejected HTML content from: ${respUrl}`);
+                            }
+                            return; // Skip this response - it's an error page
+                        }
+                    } catch (e) {
+                        // Validation failed, skip this buffer
+                        return;
+                    }
+
                     capture.buffer = buffer;
                     capture.size = buffer.length;
                     capture.url = respUrl;
+                    capture.contentType = contentType;
                     if (debugMode) {
                         console.error(`[giil:debug] Captured: ${(buffer.length / 1024).toFixed(1)} KB, ${contentType}`);
                     }
@@ -1111,6 +1484,7 @@ function resetImageCapture(capture) {
     capture.buffer = null;
     capture.size = 0;
     capture.url = null;
+    capture.contentType = null;
 }
 
 // Main extraction function
@@ -1207,6 +1581,14 @@ async function extractImage() {
 
                 for (let i = 0; i < thumbnails.length; i++) {
                     try {
+                        // Polite delay between photos (skip first to avoid initial delay)
+                        if (i > 0) {
+                            if (debugMode) {
+                                console.error(`[giil:debug] Rate limiting: waiting ${ALBUM_DELAY_MS}ms...`);
+                            }
+                            await sleep(ALBUM_DELAY_MS);
+                        }
+
                         console.error(`\n[giil] Photo ${i + 1}/${thumbnails.length}...`);
 
                         // Re-query thumbnails in case DOM changed
@@ -1317,7 +1699,46 @@ async function extractImage() {
 
 extractImage().catch(err => {
     console.error(`[giil] Fatal: ${err.message}`);
-    process.exit(1);
+
+    // Determine error code and exit code
+    let errorCode = 'CAPTURE_FAILURE';
+    let exitCode = ExitCodes.CAPTURE_FAILURE;
+    let remediation = null;
+
+    // Use error's exitCode if available (set by validation functions)
+    if (err.exitCode) {
+        exitCode = err.exitCode;
+        errorCode = err.errorCode || 'CAPTURE_FAILURE';
+        remediation = err.remediation || null;
+    } else {
+        // Map common error types to exit codes
+        const msg = err.message.toLowerCase();
+        if (msg.includes('timeout') || msg.includes('net::err') || msg.includes('dns')) {
+            errorCode = 'NETWORK_ERROR';
+            exitCode = ExitCodes.NETWORK_ERROR;
+            remediation = 'Check your network connection and try again.';
+        } else if (msg.includes('404') || msg.includes('not found') || msg.includes('expired')) {
+            errorCode = 'NOT_FOUND';
+            exitCode = ExitCodes.NOT_FOUND;
+            remediation = 'The link may have expired or the file was deleted.';
+        } else if (msg.includes('login') || msg.includes('auth') || msg.includes('password')) {
+            errorCode = 'AUTH_REQUIRED';
+            exitCode = ExitCodes.AUTH_REQUIRED;
+            remediation = 'The file is not publicly shared. The owner must enable public access.';
+        } else if (msg.includes('video') || msg.includes('unsupported')) {
+            errorCode = 'UNSUPPORTED_TYPE';
+            exitCode = ExitCodes.UNSUPPORTED_TYPE;
+            remediation = 'giil only supports image files, not videos or documents.';
+        }
+    }
+
+    // Output JSON error if --json mode is enabled
+    if (jsonOutput) {
+        const jsonError = formatJsonError(errorCode, err.message, remediation);
+        console.log(JSON.stringify(jsonError));
+    }
+
+    process.exit(exitCode);
 });
 SCRIPT_EOF
 
@@ -1346,7 +1767,7 @@ parse_args() {
             --output)
                 if [[ -z "${2:-}" || "$2" == --* ]]; then
                     log_error "--output requires a directory argument"
-                    exit 1
+                    exit "$EXIT_USAGE_ERROR"
                 fi
                 OUTPUT_DIR="$2"
                 shift 2
@@ -1354,7 +1775,7 @@ parse_args() {
             --quality)
                 if [[ -z "${2:-}" || "$2" == --* ]]; then
                     log_error "--quality requires a number argument"
-                    exit 1
+                    exit "$EXIT_USAGE_ERROR"
                 fi
                 QUALITY="$2"
                 shift 2
@@ -1362,7 +1783,7 @@ parse_args() {
             --timeout)
                 if [[ -z "${2:-}" || "$2" == --* ]]; then
                     log_error "--timeout requires a number argument"
-                    exit 1
+                    exit "$EXIT_USAGE_ERROR"
                 fi
                 TIMEOUT="$2"
                 shift 2
@@ -1375,6 +1796,18 @@ parse_args() {
                 DEBUG_MODE=true
                 shift
                 ;;
+            --optimize)
+                OPTIMIZE_MODE=true
+                shift
+                ;;
+            --convert)
+                if [[ -z "${2:-}" || "$2" == --* ]]; then
+                    log_error "--convert requires a format argument (jpeg, png, webp)"
+                    exit "$EXIT_USAGE_ERROR"
+                fi
+                CONVERT_FORMAT="$2"
+                shift 2
+                ;;
             --version|-v)
                 show_version
                 ;;
@@ -1384,14 +1817,14 @@ parse_args() {
             -*)
                 log_error "Unknown option: $1"
                 log_error "Run 'giil --help' for usage"
-                exit 1
+                exit "$EXIT_USAGE_ERROR"
                 ;;
             *)
                 if [[ -z "$URL" ]]; then
                     URL="$1"
                 else
                     log_error "Multiple URLs not supported (use --all for albums)"
-                    exit 1
+                    exit "$EXIT_USAGE_ERROR"
                 fi
                 shift
                 ;;
@@ -1405,13 +1838,13 @@ parse_args() {
     # Validate quality
     if ! [[ "$QUALITY" =~ ^[0-9]+$ ]] || [[ "$QUALITY" -lt 1 ]] || [[ "$QUALITY" -gt 100 ]]; then
         log_error "Quality must be between 1 and 100"
-        exit 1
+        exit "$EXIT_USAGE_ERROR"
     fi
 
     # Validate timeout
     if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || [[ "$TIMEOUT" -lt 5 ]]; then
         log_error "Timeout must be at least 5 seconds"
-        exit 1
+        exit "$EXIT_USAGE_ERROR"
     fi
 
     # Warn about incompatible options
@@ -1422,7 +1855,7 @@ parse_args() {
     # Create output directory if needed
     if [[ -e "$OUTPUT_DIR" && ! -d "$OUTPUT_DIR" ]]; then
         log_error "--output path exists and is not a directory: $OUTPUT_DIR"
-        exit 1
+        exit "$EXIT_USAGE_ERROR"
     fi
     if [[ ! -d "$OUTPUT_DIR" ]]; then
         mkdir -p "$OUTPUT_DIR"
