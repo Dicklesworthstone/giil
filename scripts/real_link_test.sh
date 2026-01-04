@@ -27,12 +27,12 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$PWD/.ci-cache}"
 
 ./giil "$LINK" --json --output "$OUTPUT_DIR" --timeout 120 > "$OUTPUT_JSON"
 
-read -r OUTPUT_PATH METHOD < <(python - << 'PY' "$OUTPUT_JSON"
+read -r OUTPUT_PATH METHOD < <(python3 - << 'PY' "$OUTPUT_JSON"
 import json, sys
 with open(sys.argv[1], 'r', encoding='utf-8') as f:
     data = json.load(f)
-print(data.get('path', ''))
-print(data.get('method', ''))
+# Print on single line so read can capture both values
+print(data.get('path', ''), data.get('method', ''))
 PY
 )
 
