@@ -1186,15 +1186,16 @@ function validateImageContent(buffer, contentType = null, debugMode = false) {
 }
 
 // Helper: generate unique filename with counter if needed
-function getUniqueFilename(outputDir, dateStr, index = null) {
+// v3: Added ext parameter for preserving original format
+function getUniqueFilename(outputDir, dateStr, index = null, ext = 'jpg') {
     const suffix = index !== null ? `_${String(index).padStart(3, '0')}` : '';
-    let filename = `icloud_${dateStr}${suffix}.jpg`;
+    let filename = `icloud_${dateStr}${suffix}.${ext}`;
     let outputPath = join(outputDir, filename);
 
     // If file exists, add counter
     let counter = 1;
     while (existsSync(outputPath)) {
-        filename = `icloud_${dateStr}${suffix}_${counter}.jpg`;
+        filename = `icloud_${dateStr}${suffix}_${counter}.${ext}`;
         outputPath = join(outputDir, filename);
         counter++;
     }
@@ -1202,20 +1203,30 @@ function getUniqueFilename(outputDir, dateStr, index = null) {
 }
 
 // Process a single image buffer and save/output it
+// v3 behavior: Preserve original bytes by default. Only process if --optimize or --convert specified.
 async function processAndSaveImage(buffer, options) {
     const {
         outputDir, quality, base64Output, jsonOutput,
-        captureMethod, sourceUrl, downloadedFilePath, index
+        captureMethod, sourceUrl, downloadedFilePath, index,
+        optimize, convert  // v3 flags
     } = options;
 
     // Try to get EXIF datetime
     let captureDate = await getExifDateTime(buffer);
 
-    // Handle HEIC/HEIF conversion if needed
+    // Determine if we need to process the image
+    const needsProcessing = optimize || convert;
+
+    // Handle HEIC/HEIF conversion if Sharp can't read the original format
     let processableBuffer = buffer;
+    let originalFormat = null;
+    let metadata = null;
+
     try {
-        await sharp(buffer).metadata();
+        metadata = await sharp(buffer).metadata();
+        originalFormat = metadata.format;
     } catch (sharpError) {
+        // Sharp can't read the format - likely HEIC/HEIF, need to convert
         const tempJpeg = join(outputDir, `_temp_converted_${Date.now()}.jpg`);
         let didConvert = false;
         let tempInput = null;
@@ -1240,6 +1251,9 @@ async function processAndSaveImage(buffer, options) {
             processableBuffer = readFileSync(tempJpeg);
             try { unlinkSync(tempJpeg); } catch (e) {}
             console.error('[giil] Converted HEIC using system tools');
+            // Re-read metadata from converted buffer
+            metadata = await sharp(processableBuffer).metadata();
+            originalFormat = 'heic';  // Remember original was HEIC
         } else {
             if (existsSync(tempJpeg)) {
                 try { unlinkSync(tempJpeg); } catch (e) {}
@@ -1249,27 +1263,51 @@ async function processAndSaveImage(buffer, options) {
         }
     }
 
-    // Get metadata
-    const metadata = await sharp(processableBuffer).metadata();
-    console.error(`[giil] Image: ${metadata.width}x${metadata.height}, ${metadata.format || 'unknown'}`);
+    console.error(`[giil] Image: ${metadata.width}x${metadata.height}, ${metadata.format || originalFormat || 'unknown'}`);
 
     // Use current time if no EXIF date
     if (!captureDate) {
         captureDate = new Date();
     }
 
-    // Convert to optimized JPEG
-    const processedBuffer = await sharp(processableBuffer)
-        .jpeg({
-            quality: quality,
-            mozjpeg: true,
-            chromaSubsampling: '4:2:0'
-        })
-        .toBuffer();
+    // v3 behavior: Only process if explicitly requested
+    let processedBuffer;
+    let outputExt;
 
-    // Generate filename with datetime
+    if (needsProcessing) {
+        // Apply Sharp processing when requested
+        let pipeline = sharp(processableBuffer);
+
+        if (convert === 'jpeg' || (optimize && !convert)) {
+            // Convert to JPEG or optimize with MozJPEG
+            pipeline = pipeline.jpeg({
+                quality: quality,
+                mozjpeg: optimize === true,
+                chromaSubsampling: '4:2:0'
+            });
+            outputExt = 'jpg';
+            console.error(`[giil] Processing: ${optimize ? 'MozJPEG optimization' : 'JPEG conversion'} (quality ${quality})`);
+        } else if (convert === 'png') {
+            pipeline = pipeline.png({ compressionLevel: 9 });
+            outputExt = 'png';
+            console.error('[giil] Processing: PNG conversion');
+        } else if (convert === 'webp') {
+            pipeline = pipeline.webp({ quality: quality });
+            outputExt = 'webp';
+            console.error(`[giil] Processing: WebP conversion (quality ${quality})`);
+        }
+
+        processedBuffer = await pipeline.toBuffer();
+    } else {
+        // v3 default: Preserve original bytes
+        processedBuffer = processableBuffer;
+        outputExt = metadata.format || 'jpg';
+        console.error('[giil] Preserving original bytes (use --optimize for MozJPEG compression)');
+    }
+
+    // Generate filename with datetime (v3: use outputExt for format-aware filenames)
     const dateStr = formatDateForFilename(captureDate);
-    const { filename, outputPath } = getUniqueFilename(outputDir, dateStr, index);
+    const { filename, outputPath } = getUniqueFilename(outputDir, dateStr, index, outputExt);
 
     // Clean up temp downloaded file
     if (downloadedFilePath && existsSync(downloadedFilePath)) {
@@ -1487,7 +1525,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
         }
     }
 
-    // Process and save
+    // Process and save (v3: pass optimize/convert flags)
     console.error('[giil] Processing image...');
     return await processAndSaveImage(finalBuffer, {
         outputDir,
@@ -1497,7 +1535,9 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
         captureMethod,
         sourceUrl,
         downloadedFilePath,
-        index
+        index,
+        optimize: optimizeMode,
+        convert: convertFormat
     });
 }
 
@@ -1507,7 +1547,9 @@ function createImageCaptureHandler(debugMode) {
         buffer: null,
         size: 0,
         url: null,
-        contentType: null
+        contentType: null,
+        // For album mode: collect all unique Google Photos CDN base URLs
+        gphotoUrls: new Set()
     };
 
     const handler = async (response) => {
@@ -1532,6 +1574,15 @@ function createImageCaptureHandler(debugMode) {
             // Match iCloud CDN, Google Photos CDN, or any image from known domains
             const isRelevantCdn = isIcloudCdn || isGooglePhotosCdn ||
                                   (respUrl.includes('.icloud.com') && (isImage || hasImageExtension));
+
+            // For Google Photos album mode: collect all unique base URLs
+            if (isGooglePhotosCdn && respUrl.includes('lh3.googleusercontent.com/pw/')) {
+                const { baseUrl } = extractGooglePhotosBaseUrl(respUrl);
+                capture.gphotoUrls.add(baseUrl);
+                if (debugMode) {
+                    console.error(`[giil:debug] Collected Google Photos URL: ${baseUrl.substring(0, 80)}...`);
+                }
+            }
 
             if (isRelevantCdn && (isPhotoFormat || hasImageExtension || isGooglePhotosCdn)) {
                 const buffer = await response.body();
@@ -1631,8 +1682,9 @@ async function extractImage() {
             // ========================================
             console.error('[giil] Album mode: finding all photos...');
 
-            // Find thumbnail elements
+            // Find thumbnail elements (platform-aware selectors)
             const thumbnailSelectors = [
+                // Generic selectors
                 '[data-testid*="thumbnail"]',
                 '.thumbnail',
                 '[class*="thumbnail"]',
@@ -1645,7 +1697,14 @@ async function extractImage() {
                 // iCloud specific
                 '.media-grid-item',
                 '[class*="media-grid"]',
-                '.asset-grid img'
+                '.asset-grid img',
+                // Google Photos specific (v3.0+)
+                '[data-latest-bg]',
+                '.RY3tic',
+                '[role="listitem"] a',
+                'a[aria-label*="photo" i]',
+                'c-wiz [role="img"]',
+                '[style*="background-image"][tabindex]'
             ];
 
             let thumbnails = [];
@@ -1658,12 +1717,44 @@ async function extractImage() {
             }
 
             if (thumbnails.length === 0) {
-                // Try clicking on the first photo area and check if it's a single photo
-                console.error('[giil] No album thumbnails found, treating as single photo');
-                const result = await captureSinglePhoto(page, context, {
-                    outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs
-                }, imageCapture);
-                results.push(result);
+                // For Google Photos: try using collected CDN URLs as fallback
+                if (currentPlatform === 'gphotos' && imageCapture.gphotoUrls.size > 0) {
+                    const gphotoBaseUrls = Array.from(imageCapture.gphotoUrls);
+                    console.error(`[giil] Using ${gphotoBaseUrls.length} collected Google Photos URLs...`);
+
+                    for (let i = 0; i < gphotoBaseUrls.length; i++) {
+                        try {
+                            // Rate limiting between photos
+                            if (i > 0) {
+                                await sleep(ALBUM_DELAY_MS);
+                            }
+
+                            console.error(`\n[giil] Photo ${i + 1}/${gphotoBaseUrls.length}...`);
+                            const fullResResult = await downloadGooglePhotosFullRes(gphotoBaseUrls[i]);
+
+                            if (fullResResult && fullResResult.buffer) {
+                                // Process and save the image
+                                const result = await processAndSaveImage(fullResResult.buffer, {
+                                    outputDir, quality, base64Output, jsonOutput,
+                                    captureMethod: 'url-extraction',
+                                    sourceUrl: fullResResult.url,
+                                    downloadedFilePath: null,
+                                    index: i + 1
+                                });
+                                results.push(result);
+                            }
+                        } catch (e) {
+                            console.error(`[giil] Failed to process photo ${i + 1}: ${e.message}`);
+                        }
+                    }
+                } else {
+                    // Fallback: treat as single photo
+                    console.error('[giil] No album thumbnails found, treating as single photo');
+                    const result = await captureSinglePhoto(page, context, {
+                        outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs
+                    }, imageCapture);
+                    results.push(result);
+                }
             } else {
                 console.error(`[giil] Processing ${thumbnails.length} photos...`);
 
