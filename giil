@@ -947,7 +947,7 @@ function formatDateForJson(date) {
 function detectPlatform(urlStr) {
     const patterns = {
         // icloud.com or share.icloud.com (preceded by // or .)
-        icloud: /(?:\/\/|\.)?(?:share\.)?icloud\.com\/photos/i,
+        icloud: /(?:\/\/|\.)(?:share\.)?icloud\.com\/photos/i,
         // dropbox.com (preceded by // or .)
         dropbox: /(?:\/\/|\.)dropbox\.com\/(?:s|scl\/fi|sh)\//i,
         // photos.app.goo.gl or photos.google.com (preceded by // or .)
