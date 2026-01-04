@@ -886,9 +886,11 @@ const debugMode = args[4] === 'true';
 const timeoutSec = parseInt(args[5] || '60', 10);
 const jsonOutput = args[6] === 'true';
 const allMode = args[7] === 'true';
+const optimizeMode = args[8] === 'true';
+const convertFormat = args[9] || '';  // 'jpeg', 'png', 'webp', or ''
 
 if (!url) {
-    console.error('Usage: node extractor.mjs <url> <outputDir> <quality> <base64> <debug> <timeout> <json> <all>');
+    console.error('Usage: node extractor.mjs <url> <outputDir> <quality> <base64> <debug> <timeout> <json> <all> <optimize> <convert>');
     process.exit(ExitCodes.USAGE_ERROR);
 }
 
@@ -924,6 +926,60 @@ function detectPlatform(urlStr) {
 
 // Current platform (detected from input URL)
 const currentPlatform = detectPlatform(url);
+
+// -----------------------------------------------------------------------------
+// Google Photos URL Helpers (v3.0+)
+// -----------------------------------------------------------------------------
+// Google Photos CDN URLs have size modifiers after '=' (e.g., =w1920-h1080)
+// To get full resolution, use =s0 (original size) or =d (download)
+
+/**
+ * Extract base URL from Google Photos CDN URL and return full-res version
+ * @param {string} cdnUrl - The CDN URL with size modifier
+ * @returns {{baseUrl: string, fullResUrl: string}} Base and full-resolution URLs
+ */
+function extractGooglePhotosBaseUrl(cdnUrl) {
+    // Remove size modifier (everything after last '=' in the path)
+    // Example: https://lh3.googleusercontent.com/pw/ABC123=w1920-h1080
+    //       -> https://lh3.googleusercontent.com/pw/ABC123
+    const eqIndex = cdnUrl.lastIndexOf('=');
+    const baseUrl = eqIndex > 0 ? cdnUrl.substring(0, eqIndex) : cdnUrl;
+
+    // =s0 means original size, =d means download (both give full resolution)
+    const fullResUrl = `${baseUrl}=s0`;
+
+    return { baseUrl, fullResUrl };
+}
+
+/**
+ * Try to download full-resolution image from Google Photos CDN
+ * @param {string} cdnUrl - The captured CDN URL
+ * @returns {Promise<{buffer: Buffer, url: string}|null>} Buffer and URL or null if failed
+ */
+async function downloadGooglePhotosFullRes(cdnUrl) {
+    const { fullResUrl } = extractGooglePhotosBaseUrl(cdnUrl);
+
+    try {
+        // Use native fetch (available in Node 18+)
+        const response = await fetch(fullResUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+            }
+        });
+
+        if (!response.ok) {
+            console.error(`[giil] Google Photos full-res download failed: HTTP ${response.status}`);
+            return null;
+        }
+
+        const buffer = Buffer.from(await response.arrayBuffer());
+        console.error(`[giil] Downloaded Google Photos full-res: ${(buffer.length / 1024).toFixed(1)} KB`);
+        return { buffer, url: fullResUrl };
+    } catch (e) {
+        console.error(`[giil] Google Photos download error: ${e.message}`);
+        return null;
+    }
+}
 
 // v3 JSON Schema Helper: format success output
 // Wraps all output with schema_version, ok, and platform fields
@@ -1433,8 +1489,11 @@ function createImageCaptureHandler(debugMode) {
             const respUrl = response.url();
             const contentType = (response.headers()['content-type'] || '').toLowerCase();
 
+            // Platform-specific CDN detection
             const isIcloudCdn = respUrl.includes('cvws.icloud-content.com') ||
                                respUrl.includes('icloud-content.com');
+            const isGooglePhotosCdn = respUrl.includes('lh3.googleusercontent.com/pw/') ||
+                                      respUrl.includes('googleusercontent.com/');
             const isImage = contentType.startsWith('image/');
             const isPhotoFormat = contentType.includes('jpeg') ||
                                   contentType.includes('png') ||
@@ -1444,8 +1503,11 @@ function createImageCaptureHandler(debugMode) {
             const urlLower = respUrl.toLowerCase();
             const hasImageExtension = /\.(jpe?g|png|heic|heif|webp)(\?|#|$)/.test(urlLower);
 
-            if ((isIcloudCdn || (respUrl.includes('.icloud.com') && (isImage || hasImageExtension))) &&
-                (isPhotoFormat || hasImageExtension)) {
+            // Match iCloud CDN, Google Photos CDN, or any image from known domains
+            const isRelevantCdn = isIcloudCdn || isGooglePhotosCdn ||
+                                  (respUrl.includes('.icloud.com') && (isImage || hasImageExtension));
+
+            if (isRelevantCdn && (isPhotoFormat || hasImageExtension || isGooglePhotosCdn)) {
                 const buffer = await response.body();
                 if (buffer && buffer.length > capture.size) {
                     // Validate content before caching (v3.0+)
@@ -1847,6 +1909,21 @@ parse_args() {
         exit "$EXIT_USAGE_ERROR"
     fi
 
+    # Validate --convert format if provided
+    if [[ -n "$CONVERT_FORMAT" ]]; then
+        case "$CONVERT_FORMAT" in
+            jpeg|jpg|png|webp)
+                # Normalize jpg to jpeg
+                [[ "$CONVERT_FORMAT" == "jpg" ]] && CONVERT_FORMAT="jpeg"
+                ;;
+            *)
+                log_error "Invalid --convert format: $CONVERT_FORMAT"
+                log_error "Supported formats: jpeg, png, webp"
+                exit "$EXIT_USAGE_ERROR"
+                ;;
+        esac
+    fi
+
     # Warn about incompatible options
     if [[ "$BASE64_OUTPUT" == "true" && "$ALL_MODE" == "true" ]]; then
         log_warn "Using --base64 with --all will output multiple base64 strings"
@@ -1874,6 +1951,96 @@ parse_args() {
 }
 
 # -----------------------------------------------------------------------------
+# Dropbox Direct Download (v3.0+ - fast path, no Playwright)
+# -----------------------------------------------------------------------------
+# Dropbox provides full-resolution images via raw=1 parameter.
+# This is FASTER and BETTER quality than Playwright (which only gets previews).
+
+download_dropbox_direct() {
+    # Normalize URL to direct download format
+    local raw_url
+    raw_url=$(normalize_dropbox_url "$URL")
+
+    log_step "Dropbox detected - using fast direct download..."
+    log_debug "Raw URL: $raw_url"
+
+    # Generate output filename with timestamp
+    local timestamp
+    timestamp=$(date +%Y%m%d_%H%M%S)
+    local output_path="${OUTPUT_DIR}/dropbox_${timestamp}.tmp"
+    local final_path="${OUTPUT_DIR}/dropbox_${timestamp}.jpg"
+
+    # Download with curl (follow redirects, get HTTP code)
+    local http_code
+    http_code=$(curl -sL -w "%{http_code}" -o "$output_path" "$raw_url")
+
+    if [[ "$http_code" != "200" ]]; then
+        log_error "Download failed with HTTP $http_code"
+        rm -f "$output_path"
+        if [[ "$http_code" == "404" ]]; then
+            exit "$EXIT_NOT_FOUND"
+        elif [[ "$http_code" == "401" || "$http_code" == "403" ]]; then
+            exit "$EXIT_AUTH_REQUIRED"
+        else
+            exit "$EXIT_NETWORK_ERROR"
+        fi
+    fi
+
+    # Validate content is actually an image (not HTML error page)
+    local content_type
+    content_type=$(file --mime-type -b "$output_path" 2>/dev/null || echo "unknown")
+
+    if [[ "$content_type" == "text/html" || "$content_type" == "text/plain" ]]; then
+        log_error "Received HTML instead of image."
+        log_error "The link may be password-protected, expired, or deleted."
+        rm -f "$output_path"
+        exit "$EXIT_AUTH_REQUIRED"
+    fi
+
+    # Determine extension from content type
+    local ext="jpg"
+    case "$content_type" in
+        image/png) ext="png" ;;
+        image/gif) ext="gif" ;;
+        image/webp) ext="webp" ;;
+        image/heic|image/heif) ext="heic" ;;
+    esac
+    final_path="${OUTPUT_DIR}/dropbox_${timestamp}.${ext}"
+
+    # Move to final path
+    mv "$output_path" "$final_path"
+
+    # Get file size for output
+    local file_size
+    file_size=$(stat -c%s "$final_path" 2>/dev/null || stat -f%z "$final_path" 2>/dev/null || echo "0")
+    local size_kb=$((file_size / 1024))
+
+    log_success "Downloaded: ${final_path} (${size_kb} KB, direct)"
+
+    # Output based on mode
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+        # Get image dimensions using identify if available
+        local width=0 height=0
+        if command -v identify &> /dev/null; then
+            local dims
+            dims=$(identify -format "%w %h" "$final_path" 2>/dev/null || echo "0 0")
+            width=$(echo "$dims" | cut -d' ' -f1)
+            height=$(echo "$dims" | cut -d' ' -f2)
+        fi
+
+        cat << EOF
+{"ok":true,"schema_version":"1","platform":"dropbox","path":"${final_path}","method":"direct","size":${file_size},"width":${width},"height":${height},"sourceUrl":"${raw_url}"}
+EOF
+    elif [[ "$BASE64_OUTPUT" == "true" ]]; then
+        base64 < "$final_path"
+    else
+        echo "$final_path"
+    fi
+
+    exit "$EXIT_SUCCESS"
+}
+
+# -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 
@@ -1897,28 +2064,43 @@ main() {
         log_info "Album mode: downloading all photos"
     fi
 
-    log_step "Checking dependencies..."
-    ensure_node
-    ensure_playwright
+    # Detect platform and use appropriate strategy (v3.0+)
+    local platform
+    platform=$(detect_platform "$URL")
+    log_debug "Detected platform: $platform"
 
-    local script_path
-    script_path=$(create_extractor_script)
+    case "$platform" in
+        dropbox)
+            # Fast path: direct download, no Playwright needed
+            download_dropbox_direct
+            # download_dropbox_direct exits, so we never reach here
+            ;;
+        icloud|gphotos|gdrive|unknown)
+            # Standard path: use Playwright extractor
+            log_step "Checking dependencies..."
+            ensure_node
+            ensure_playwright
 
-    if [[ "$ALL_MODE" == "true" ]]; then
-        log_step "Extracting album from iCloud..."
-    else
-        log_step "Extracting image from iCloud..."
-    fi
+            local script_path
+            script_path=$(create_extractor_script)
 
-    log_debug "URL: $URL"
-    log_debug "Output: $OUTPUT_DIR"
-    log_debug "Quality: $QUALITY"
-    log_debug "Timeout: ${TIMEOUT}s"
-    log_debug "JSON output: $JSON_OUTPUT"
-    log_debug "All mode: $ALL_MODE"
+            if [[ "$ALL_MODE" == "true" ]]; then
+                log_step "Extracting album..."
+            else
+                log_step "Extracting image..."
+            fi
 
-    cd "$GIIL_HOME"
-    node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE"
+            log_debug "URL: $URL"
+            log_debug "Output: $OUTPUT_DIR"
+            log_debug "Quality: $QUALITY"
+            log_debug "Timeout: ${TIMEOUT}s"
+            log_debug "JSON output: $JSON_OUTPUT"
+            log_debug "All mode: $ALL_MODE"
+
+            cd "$GIIL_HOME"
+            node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE"
+            ;;
+    esac
 }
 
 main "$@"

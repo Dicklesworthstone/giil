@@ -1,2 +1,5 @@
 .ci-cache/
 .ci-output/
+
+# bv (beads viewer) local config and caches
+.bv/
