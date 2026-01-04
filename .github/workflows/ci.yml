@@ -71,6 +71,46 @@ jobs:
         run: |
           node --test scripts/tests/*.test.mjs
 
+  e2e-tests:
+    name: E2E Integration Tests
+    needs: [shellcheck, syntax-check, unit-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [icloud, dropbox]
+        # google-photos and google-drive require auth, test manually
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache giil dependencies
+        uses: actions/cache@v4
+        with:
+          path: .ci-cache
+          key: ${{ runner.os }}-giil-${{ hashFiles('giil') }}
+          restore-keys: |
+            ${{ runner.os }}-giil-
+
+      - name: Run ${{ matrix.platform }} E2E test
+        if: ${{ hashFiles(format('scripts/tests/e2e/{0}.test.sh', matrix.platform)) != '' }}
+        run: |
+          export GIIL_LOG_FORMAT=json
+          bash scripts/tests/e2e/${{ matrix.platform }}.test.sh
+        env:
+          GIIL_CACHE_DIR: ${{ github.workspace }}/.ci-cache
+
+      - name: Skip if test not found
+        if: ${{ hashFiles(format('scripts/tests/e2e/{0}.test.sh', matrix.platform)) == '' }}
+        run: |
+          echo "::notice::E2E test for ${{ matrix.platform }} not yet implemented"
+
   install-test:
     name: Installation Test
     needs: [shellcheck, syntax-check, unit-tests]

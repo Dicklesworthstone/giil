@@ -18,7 +18,7 @@ let detectPlatform;
 before(async () => {
     // Extract pure functions from giil
     const extractorPath = join(__dirname, 'extract-functions.mjs');
-    const tempModule = '/tmp/giil-test-functions.mjs';
+    const tempModule = `/tmp/giil-test-platform-detection-${process.pid}.mjs`;
 
     // Run extraction
     const extracted = execSync(`node "${extractorPath}"`, { encoding: 'utf8' });

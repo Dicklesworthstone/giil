@@ -20,7 +20,7 @@ let getGoogleDriveViewerUrl;
 before(async () => {
     // Extract pure functions from giil
     const extractorPath = join(__dirname, 'extract-functions.mjs');
-    const tempModule = '/tmp/giil-test-functions.mjs';
+    const tempModule = `/tmp/giil-test-google-drive-${process.pid}.mjs`;
 
     // Run extraction
     const extracted = execSync(`node "${extractorPath}"`, { encoding: 'utf8' });

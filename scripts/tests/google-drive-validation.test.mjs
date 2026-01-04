@@ -16,7 +16,7 @@ let validateGoogleDriveResponse;
 
 before(async () => {
     const extractorPath = join(__dirname, 'extract-functions.mjs');
-    const tempModule = '/tmp/giil-test-functions.mjs';
+    const tempModule = `/tmp/giil-test-google-drive-validation-${process.pid}.mjs`;
     const extracted = execSync(`node "${extractorPath}"`, { encoding: 'utf8' });
     writeFileSync(tempModule, extracted);
     const mod = await import(tempModule);
