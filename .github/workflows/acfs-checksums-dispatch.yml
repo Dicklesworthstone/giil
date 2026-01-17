@@ -1,3 +1,17 @@
+# .github/workflows/acfs-checksums-dispatch.yml
+#
+# Notifies ACFS (Agentic Coding Flywheel Setup) when installer scripts change,
+# triggering automatic checksum updates in the downstream repository.
+#
+# Setup:
+#   1. Create a PAT with 'contents:read' scope on Dicklesworthstone/agentic_coding_flywheel_setup
+#   2. Add it as a secret named ACFS_REPO_DISPATCH_TOKEN in this repo
+#
+# Triggers:
+#   - Push to main/master that modifies install.sh or scripts/install.sh
+#   - New release published
+#   - Manual workflow dispatch (for testing)
+#
 name: Notify ACFS checksum monitor
 
 on:
@@ -12,19 +26,39 @@ on:
 
 jobs:
   dispatch:
+    name: Dispatch to ACFS
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Ensure dispatch token
-        if: ${{ secrets.ACFS_REPO_DISPATCH_TOKEN == '' }}
+      - name: Validate dispatch token
         run: |
-          echo "Missing secret ACFS_REPO_DISPATCH_TOKEN. Add a PAT with repo access for Dicklesworthstone/agentic_coding_flywheel_setup." >&2
-          exit 1
-      - name: Dispatch to ACFS
-        if: ${{ secrets.ACFS_REPO_DISPATCH_TOKEN != '' }}
+          if [[ -z "${{ secrets.ACFS_REPO_DISPATCH_TOKEN }}" ]]; then
+            echo "::error::Missing secret ACFS_REPO_DISPATCH_TOKEN"
+            echo "Add a PAT with repo access for Dicklesworthstone/agentic_coding_flywheel_setup"
+            exit 1
+          fi
+
+      - name: Dispatch upstream-changed event
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.ACFS_REPO_DISPATCH_TOKEN }}
           repository: Dicklesworthstone/agentic_coding_flywheel_setup
           event-type: upstream-changed
           client-payload: |
-            {"repo":"${{ github.repository }}","ref":"${{ github.ref }}","sha":"${{ github.sha }}","event":"${{ github.event_name }}"}
+            {
+              "tool": "${{ github.event.repository.name }}",
+              "repo": "${{ github.repository }}",
+              "ref": "${{ github.ref }}",
+              "sha": "${{ github.sha }}",
+              "event": "${{ github.event_name }}",
+              "actor": "${{ github.actor }}",
+              "timestamp": "${{ github.event.head_commit.timestamp || github.event.release.published_at }}"
+            }
+
+      - name: Log dispatch summary
+        run: |
+          echo "Dispatched upstream-changed event to ACFS"
+          echo "  Tool: ${{ github.event.repository.name }}"
+          echo "  Event: ${{ github.event_name }}"
+          echo "  SHA: ${{ github.sha }}"
+          echo "  Actor: ${{ github.actor }}"

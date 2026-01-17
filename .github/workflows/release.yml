@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
 
+# Prevent concurrent releases
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -12,6 +17,9 @@ jobs:
   release:
     name: Create Release with Checksums
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -73,7 +81,7 @@ jobs:
           sed -i 's/^          //' release_notes.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: giil v${{ steps.version.outputs.version }}
           body_path: release_notes.md
@@ -85,20 +93,23 @@ jobs:
             install.sh.sha256
           generate_release_notes: true
           append_body: true
+          fail_on_unmatched_files: true
 
   update-version-file:
     name: Update VERSION file
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Update VERSION file
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
+          VERSION="${{ needs.release.outputs.version }}"
           echo "$VERSION" > VERSION
           echo "Updated VERSION to: $VERSION"
 
@@ -113,6 +124,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "VERSION file already up to date"
           else
-            git commit -m "chore: update VERSION to ${GITHUB_REF#refs/tags/v} [skip ci]"
+            git commit -m "chore: update VERSION to ${{ needs.release.outputs.version }} [skip ci]"
             git push
           fi

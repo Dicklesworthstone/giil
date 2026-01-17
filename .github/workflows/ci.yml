@@ -9,15 +9,24 @@ on:
   schedule:
     - cron: '0 3 * * *'
 
+# Cancel in-progress runs for the same branch/PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: '20'
+
 jobs:
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
       - name: Run ShellCheck on giil
-        uses: ludeeus/action-shellcheck@master
+        uses: ludeeus/action-shellcheck@2.0.0
         with:
           scandir: '.'
           severity: warning
@@ -30,6 +39,7 @@ jobs:
   syntax-check:
     name: Syntax Validation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -42,7 +52,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Extract and validate embedded JavaScript
         run: |
@@ -59,13 +69,14 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Install test dependencies
         run: |
@@ -93,13 +104,15 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache giil dependencies
         uses: actions/cache@v4
         with:
-          path: .ci-cache
-          key: ${{ runner.os }}-giil-${{ hashFiles('giil') }}
+          path: |
+            .ci-cache
+            ~/.npm
+          key: ${{ runner.os }}-giil-${{ hashFiles('giil', 'package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-giil-
 
@@ -119,6 +132,7 @@ jobs:
   install-test:
     name: Installation Test
     needs: [shellcheck, syntax-check, unit-tests]
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -160,13 +174,15 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.10.0'
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache giil dependencies
         uses: actions/cache@v4
         with:
-          path: .ci-cache
-          key: ${{ runner.os }}-giil-${{ hashFiles('giil') }}
+          path: |
+            .ci-cache
+            ~/.npm
+          key: ${{ runner.os }}-giil-${{ hashFiles('giil', 'package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-giil-
 
@@ -177,6 +193,7 @@ jobs:
   version-consistency:
     name: Version Consistency
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
