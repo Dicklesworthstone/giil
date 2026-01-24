@@ -20,7 +20,8 @@
 #
 # Options:
 #   --base64         Output image as base64 to stdout
-#   --json           Output JSON metadata instead of plain path
+#   --format FMT     Output format: json|toon (structured output)
+#   --json           Output JSON metadata (alias for --format json)
 #   --all            Download all photos from shared album
 #   --output DIR     Output directory (default: current)
 #   --preserve       Keep original bytes (skip MozJPEG compression)
@@ -290,7 +291,10 @@ show_quickstart() {
         echo "  giil \"https://dropbox.com/s/abc123/photo.jpg\""
         echo ""
         gum style --foreground 39 "  # Download with JSON metadata"
-        echo "  giil \"https://photos.app.goo.gl/ABC123\" --json"
+        echo "  giil \"https://photos.app.goo.gl/ABC123\" --format json"
+        echo ""
+        gum style --foreground 39 "  # Download with TOON output"
+        echo "  giil \"https://photos.app.goo.gl/ABC123\" --format toon"
         echo ""
         gum style --foreground 39 "  # Download album (all photos)"
         echo "  giil \"https://share.icloud.com/photos/ABC123\" --all --output ./album"
@@ -301,7 +305,8 @@ show_quickstart() {
         gum style --faint "  --quality N      JPEG quality 1-100 (default: 85)"
         gum style --faint "  --preserve       Keep original bytes (skip compression)"
         gum style --faint "  --convert FMT    Convert to: jpeg, png, webp"
-        gum style --faint "  --json           Output JSON metadata"
+        gum style --faint "  --format FMT     Output format: json|toon"
+        gum style --faint "  --json           Output JSON metadata (alias for --format json)"
         gum style --faint "  --base64         Output base64-encoded image"
         gum style --faint "  --all            Download ALL photos from album"
         gum style --faint "  --timeout N      Timeout in seconds (default: 60)"
@@ -312,7 +317,8 @@ show_quickstart() {
         gum style --foreground 214 --bold "OUTPUT FORMAT"
         gum style --foreground 82 "  stdout:"
         gum style --faint "    Default:  /path/to/image_YYYYMMDD_HHMMSS.jpg"
-        gum style --faint "    --json:   {\"ok\":true,\"path\":\"...\",\"method\":\"...\",\"size\":...}"
+        gum style --faint "    --format json: {\"ok\":true,\"path\":\"...\",\"method\":\"...\",\"size\":...}"
+        gum style --faint "    --format toon: ok: true"
         gum style --faint "    --base64: /9j/4AAQSkZJRg... (raw base64)"
         gum style --foreground 208 "  stderr:"
         gum style --faint "    Progress messages, errors (parseable: [giil] prefix)"
@@ -344,7 +350,10 @@ show_quickstart() {
         echo "  giil \"https://dropbox.com/s/abc123/photo.jpg\""
         echo ""
         echo -e "  ${CYAN}# Download with JSON metadata${NC}"
-        echo "  giil \"https://photos.app.goo.gl/ABC123\" --json"
+        echo "  giil \"https://photos.app.goo.gl/ABC123\" --format json"
+        echo ""
+        echo -e "  ${CYAN}# Download with TOON output${NC}"
+        echo "  giil \"https://photos.app.goo.gl/ABC123\" --format toon"
         echo ""
         echo -e "  ${CYAN}# Download album (all photos)${NC}"
         echo "  giil \"https://share.icloud.com/photos/ABC123\" --all --output ./album"
@@ -354,7 +363,8 @@ show_quickstart() {
         echo -e "  ${DIM}--quality N      JPEG quality 1-100 (default: 85)${NC}"
         echo -e "  ${DIM}--preserve       Keep original bytes (skip compression)${NC}"
         echo -e "  ${DIM}--convert FMT    Convert to: jpeg, png, webp${NC}"
-        echo -e "  ${DIM}--json           Output JSON metadata${NC}"
+        echo -e "  ${DIM}--format FMT     Output format: json|toon${NC}"
+        echo -e "  ${DIM}--json           Output JSON metadata (alias for --format json)${NC}"
         echo -e "  ${DIM}--base64         Output base64-encoded image${NC}"
         echo -e "  ${DIM}--all            Download ALL photos from album${NC}"
         echo -e "  ${DIM}--timeout N      Timeout in seconds (default: 60)${NC}"
@@ -364,7 +374,8 @@ show_quickstart() {
         echo -e "${BOLD}${YELLOW}OUTPUT FORMAT${NC}"
         echo -e "  ${GREEN}stdout:${NC}"
         echo -e "    ${DIM}Default:  /path/to/image_YYYYMMDD_HHMMSS.jpg${NC}"
-        echo -e "    ${DIM}--json:   {\"ok\":true,\"path\":\"...\",\"method\":\"...\",\"size\":...}${NC}"
+        echo -e "    ${DIM}--format json: {\"ok\":true,\"path\":\"...\",\"method\":\"...\",\"size\":...}${NC}"
+        echo -e "    ${DIM}--format toon: ok: true${NC}"
         echo -e "    ${DIM}--base64: /9j/4AAQSkZJRg... (raw base64)${NC}"
         echo -e "  ${YELLOW}stderr:${NC}"
         echo -e "    ${DIM}Progress messages, errors (parseable: [giil] prefix)${NC}"
@@ -379,6 +390,8 @@ show_quickstart() {
 # Default values
 BASE64_OUTPUT=false
 JSON_OUTPUT=false
+OUTPUT_FORMAT=""
+OUTPUT_FORMAT_SOURCE=""
 ALL_MODE=false
 OUTPUT_DIR="."
 QUALITY=85
@@ -399,6 +412,7 @@ URL=""
 CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 GIIL_HOME="${GIIL_HOME:-$CACHE_HOME/giil}"
 PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$GIIL_HOME/ms-playwright}"
+TOON_BIN="${TOON_TRU_BIN:-${TOON_BIN:-tru}}"
 
 # -----------------------------------------------------------------------------
 # Logging functions (with gum integration)
@@ -458,6 +472,91 @@ log_success() {
 }
 
 # -----------------------------------------------------------------------------
+# Output format helpers (JSON / TOON)
+# -----------------------------------------------------------------------------
+
+ensure_toon_bin() {
+    if command -v "$TOON_BIN" >/dev/null 2>&1; then
+        return
+    fi
+    if [[ -x "$TOON_BIN" ]]; then
+        return
+    fi
+
+    log_error "TOON output requested but 'tru' not found."
+    log_error "Install toon_rust or set TOON_TRU_BIN/TOON_BIN to the tru binary."
+    exit "$EXIT_DEPENDENCY_ERROR"
+}
+
+encode_json_to_toon() {
+    local json_payload="$1"
+    local -a toon_cmd=("$TOON_BIN" "--encode")
+    if [[ "${TOON_STATS:-}" == "1" ]]; then
+        toon_cmd+=("--stats")
+    fi
+    printf '%s' "$json_payload" | "${toon_cmd[@]}"
+}
+
+encode_json_lines_to_toon() {
+    local line
+    local first=true
+
+    while IFS= read -r line; do
+        if [[ -z "$line" ]]; then
+            continue
+        fi
+        if [[ "$first" == "false" ]]; then
+            printf '\n'
+        fi
+        encode_json_to_toon "$line"
+        first=false
+    done
+}
+
+resolve_output_format() {
+    local resolved=""
+    local source="default"
+
+    if [[ -n "$OUTPUT_FORMAT" ]]; then
+        resolved="$OUTPUT_FORMAT"
+        source="cli"
+    elif [[ "$BASE64_OUTPUT" == "true" ]]; then
+        resolved="base64"
+        source="cli"
+    elif [[ -n "${GIIL_OUTPUT_FORMAT:-}" ]]; then
+        resolved="$GIIL_OUTPUT_FORMAT"
+        source="GIIL_OUTPUT_FORMAT"
+    elif [[ -n "${TOON_DEFAULT_FORMAT:-}" ]]; then
+        resolved="$TOON_DEFAULT_FORMAT"
+        source="TOON_DEFAULT_FORMAT"
+    else
+        resolved="path"
+    fi
+
+    case "$resolved" in
+        json|toon|path|base64)
+            ;;
+        *)
+            log_error "Invalid output format: ${resolved} (expected json|toon)"
+            exit "$EXIT_USAGE_ERROR"
+            ;;
+    esac
+
+    OUTPUT_FORMAT="$resolved"
+    OUTPUT_FORMAT_SOURCE="$source"
+
+    if [[ "$OUTPUT_FORMAT" == "json" || "$OUTPUT_FORMAT" == "toon" ]]; then
+        JSON_OUTPUT=true
+    else
+        JSON_OUTPUT=false
+    fi
+
+    if [[ "$OUTPUT_FORMAT" == "toon" ]]; then
+        ensure_toon_bin
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Help and version
 # -----------------------------------------------------------------------------
 
@@ -501,7 +600,8 @@ Uses Playwright for browser automation with a 4-tier capture strategy."
 
         gum style --foreground 214 --bold "OPTIONS"
         gum style --foreground 39 "  Output Format"
-        gum style --faint "    --json           Output JSON metadata"
+        gum style --faint "    --format FMT     Output format: json|toon"
+        gum style --faint "    --json           Output JSON metadata (alias for --format json)"
         gum style --faint "    --base64         Output base64-encoded image"
         gum style --faint "    --print-url      Output direct URL instead of downloading"
         echo ""
@@ -541,7 +641,8 @@ Uses Playwright for browser automation with a 4-tier capture strategy."
         gum style --foreground 214 --bold "OUTPUT MODES"
         gum style --foreground 82 "  stdout:"
         gum style --faint "    Default:  /path/to/image_YYYYMMDD_HHMMSS.jpg"
-        gum style --faint "    --json:   {\"ok\":true,\"path\":\"...\",\"method\":\"...\",\"size\":...}"
+        gum style --faint "    --format json: {\"ok\":true,\"path\":\"...\",\"method\":\"...\",\"size\":...}"
+        gum style --faint "    --format toon: ok: true"
         gum style --faint "    --base64: /9j/4AAQSkZJRg... (raw base64)"
         gum style --foreground 208 "  stderr:"
         gum style --faint "    Progress messages with [giil] prefix"
@@ -555,7 +656,10 @@ Uses Playwright for browser automation with a 4-tier capture strategy."
         echo "  giil \"https://dropbox.com/s/abc123/photo.jpg\" --quality 70"
         echo ""
         gum style --foreground 39 "  # Get JSON output from Google Photos"
-        echo "  giil \"https://photos.app.goo.gl/ABC123\" --json"
+        echo "  giil \"https://photos.app.goo.gl/ABC123\" --format json"
+        echo ""
+        gum style --foreground 39 "  # Get TOON output from Google Photos"
+        echo "  giil \"https://photos.app.goo.gl/ABC123\" --format toon"
         echo ""
         gum style --foreground 39 "  # Download entire iCloud album"
         echo "  giil \"https://share.icloud.com/photos/ABC123\" --all --output ~/album"
@@ -592,7 +696,8 @@ SUPPORTED PLATFORMS
 
 OPTIONS
   Output Format:
-    --json           Output JSON metadata
+    --format FMT     Output format: json|toon
+    --json           Output JSON metadata (alias for --format json)
     --base64         Output base64-encoded image
     --print-url      Output direct URL instead of downloading
 
@@ -629,7 +734,8 @@ CAPTURE STRATEGY (in priority order)
 OUTPUT MODES
   stdout:
     Default:  /path/to/image_YYYYMMDD_HHMMSS.jpg
-    --json:   {"ok":true,"path":"...","method":"...","size":...}
+    --format json: {"ok":true,"path":"...","method":"...","size":...}
+    --format toon: ok: true
     --base64: /9j/4AAQSkZJRg... (raw base64)
   stderr:
     Progress messages with [giil] prefix
@@ -642,7 +748,10 @@ EXAMPLES
   giil "https://dropbox.com/s/abc123/photo.jpg" --quality 70
 
   # Get JSON output from Google Photos
-  giil "https://photos.app.goo.gl/ABC123" --json
+  giil "https://photos.app.goo.gl/ABC123" --format json
+
+  # Get TOON output from Google Photos
+  giil "https://photos.app.goo.gl/ABC123" --format toon
 
   # Download entire iCloud album
   giil "https://share.icloud.com/photos/ABC123" --all --output ~/album
@@ -2474,7 +2583,24 @@ parse_args() {
                 BASE64_OUTPUT=true
                 shift
                 ;;
+            --format|-f)
+                if [[ -z "${2:-}" || "$2" == --* ]]; then
+                    log_error "--format requires an argument (json or toon)"
+                    exit "$EXIT_USAGE_ERROR"
+                fi
+                case "$2" in
+                    json|toon)
+                        OUTPUT_FORMAT="$2"
+                        ;;
+                    *)
+                        log_error "Invalid --format value: $2 (use json or toon)"
+                        exit "$EXIT_USAGE_ERROR"
+                        ;;
+                esac
+                shift 2
+                ;;
             --json)
+                OUTPUT_FORMAT="json"
                 JSON_OUTPUT=true
                 shift
                 ;;
@@ -2634,6 +2760,8 @@ parse_args() {
         URL="https://www.icloud.com/photos/#${photo_id}"
         log_debug "Normalized URL: share -> www format"
     fi
+
+    resolve_output_format
 }
 
 # -----------------------------------------------------------------------------
@@ -2649,7 +2777,11 @@ download_dropbox_direct() {
 
     # --print-url mode: just output the URL and exit
     if [[ "$PRINT_URL" == "true" ]]; then
-        if [[ "$JSON_OUTPUT" == "true" ]]; then
+        if [[ "$OUTPUT_FORMAT" == "toon" ]]; then
+            local json_payload
+            json_payload="{\"url\":\"${raw_url}\",\"platform\":\"dropbox\"}"
+            encode_json_to_toon "$json_payload"
+        elif [[ "$JSON_OUTPUT" == "true" ]]; then
             echo "{\"url\":\"${raw_url}\",\"platform\":\"dropbox\"}"
         else
             echo "$raw_url"
@@ -2714,7 +2846,7 @@ download_dropbox_direct() {
     log_success "Downloaded: ${final_path} (${size_kb} KB, direct)"
 
     # Output based on mode
-    if [[ "$JSON_OUTPUT" == "true" ]]; then
+    if [[ "$OUTPUT_FORMAT" == "toon" || "$JSON_OUTPUT" == "true" ]]; then
         # Get image dimensions using identify if available
         local width=0 height=0
         if command -v identify &> /dev/null; then
@@ -2728,9 +2860,17 @@ download_dropbox_direct() {
         local datetime
         datetime=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-        cat << EOF
+        local json_payload
+        json_payload=$(cat << EOF
 {"ok":true,"schema_version":"1","platform":"dropbox","path":"${final_path}","method":"direct","size":${file_size},"width":${width},"height":${height},"datetime":"${datetime}","sourceUrl":"${raw_url}"}
 EOF
+)
+
+        if [[ "$OUTPUT_FORMAT" == "toon" ]]; then
+            encode_json_to_toon "$json_payload"
+        else
+            echo "$json_payload"
+        fi
     elif [[ "$BASE64_OUTPUT" == "true" ]]; then
         base64 < "$final_path"
     else
@@ -2794,6 +2934,7 @@ main() {
             log_debug "Output: $OUTPUT_DIR"
             log_debug "Quality: $QUALITY"
             log_debug "Timeout: ${TIMEOUT}s"
+            log_debug "Output format: $OUTPUT_FORMAT (source: ${OUTPUT_FORMAT_SOURCE:-default})"
             log_debug "JSON output: $JSON_OUTPUT"
             log_debug "All mode: $ALL_MODE"
             log_debug "Optimize: $OPTIMIZE_MODE"
@@ -2806,7 +2947,11 @@ main() {
             log_debug "Preserve: $PRESERVE_MODE"
 
             cd "$GIIL_HOME"
-            node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE"
+            if [[ "$OUTPUT_FORMAT" == "toon" ]]; then
+                node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE" | encode_json_lines_to_toon
+            else
+                node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE"
+            fi
             ;;
     esac
 }

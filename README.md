@@ -61,7 +61,7 @@ curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/giil/main/instal
 
 ```bash
 # On your remote server (SSH session with Claude Code/Codex)
-giil "https://share.icloud.com/photos/0a1Abc_xYz..." --json
+giil "https://share.icloud.com/photos/0a1Abc_xYz..." --format json
 
 # AI assistant can now analyze the screenshot directly
 # {"path": "/tmp/icloud_20240115_143022.jpg", "width": 1170, "height": 2532, ...}
@@ -303,8 +303,9 @@ giil <icloud-photo-url> [options]
 | `--preserve` | off | Preserve original bytes (skip MozJPEG compression) |
 | `--convert FMT` | — | Convert to format: `jpeg`, `png`, `webp` |
 | `--quality N` | `85` | JPEG quality 1-100 |
+| `--format FMT` | — | Structured output format: `json` or `toon` |
 | `--base64` | off | Output base64 to stdout instead of saving file |
-| `--json` | off | Output JSON metadata (path, datetime, dimensions, method) |
+| `--json` | off | Output JSON metadata (alias for `--format json`) |
 | `--all` | off | Download all photos from a shared album |
 | `--timeout N` | `60` | Page load timeout in seconds |
 | `--debug` | off | Save debug artifacts (screenshot + HTML) on failure |
@@ -380,12 +381,12 @@ IMAGE_PATH=$(giil "https://share.icloud.com/photos/XXX" --output ~/Downloads 2>/
 echo "Downloaded: $IMAGE_PATH"
 ```
 
-### JSON Mode: `--json`
+### JSON Mode: `--format json` (or `--json`)
 
 Returns structured metadata for programmatic use. The JSON schema includes metadata for reliable scripting.
 
 ```bash
-giil "https://share.icloud.com/photos/XXX" --json
+giil "https://share.icloud.com/photos/XXX" --format json
 ```
 
 **Success response:**
@@ -437,11 +438,22 @@ giil "https://share.icloud.com/photos/XXX" --json
 **Parse with jq:**
 ```bash
 # Get path (if successful)
-giil "https://share.icloud.com/photos/XXX" --json | jq -r 'if .ok then .path else .error.message end'
+giil "https://share.icloud.com/photos/XXX" --format json | jq -r 'if .ok then .path else .error.message end'
 
 # Check success
-giil "..." --json | jq -e '.ok' && echo "Success" || echo "Failed"
+giil "..." --format json | jq -e '.ok' && echo "Success" || echo "Failed"
 ```
+
+### TOON Mode: `--format toon`
+
+Outputs the same metadata envelope as JSON, but encoded as TOON (Token-Optimized Object Notation).
+Requires the `tru` binary from `toon_rust` (set `TOON_TRU_BIN` or `TOON_BIN` if not on PATH).
+
+```bash
+giil "https://share.icloud.com/photos/XXX" --format toon
+```
+
+**Album mode:** `--format toon` emits one TOON document per image (separated by a blank line).
 
 ### Base64 Mode: `--base64`
 
@@ -461,7 +473,7 @@ giil "https://share.icloud.com/photos/XXX" --base64 | \
 
 **Combined with JSON:**
 ```bash
-giil "https://share.icloud.com/photos/XXX" --base64 --json
+giil "https://share.icloud.com/photos/XXX" --base64 --format json
 ```
 ```json
 {
@@ -526,11 +538,24 @@ giil "https://share.icloud.com/photos/XXX" --all --output ~/album
 /path/to/album/icloud_20240115_143247_003.jpg
 ```
 
-**With `--json`:**
+**With `--format json` (or `--json`):**
 ```json
 {"path": "...001.jpg", "method": "download", "width": 4032, ...}
 {"path": "...002.jpg", "method": "network", "width": 3024, ...}
 {"path": "...003.jpg", "method": "network", "width": 4032, ...}
+```
+
+**With `--format toon`:**
+```
+ok: true
+path: ...001.jpg
+method: download
+width: 4032
+
+ok: true
+path: ...002.jpg
+method: network
+width: 3024
 ```
 
 ### Album Mode Features
@@ -1662,8 +1687,13 @@ sudo pacman -S gum
 | `PLAYWRIGHT_BROWSERS_PATH` | Custom Chromium cache | `$GIIL_HOME/ms-playwright` |
 | `GIIL_NO_GUM` | Disable gum installation | unset |
 | `GIIL_CHECK_UPDATES` | Enable update checking (set to `1`) | unset |
+| `GIIL_OUTPUT_FORMAT` | Structured output override (`json` or `toon`) | unset |
 | `NODE_OPTIONS` | Node.js options | unset |
 | `CI` | Detected CI environment (disables gum) | unset |
+| `TOON_DEFAULT_FORMAT` | Global TOON default (`json` or `toon`) | unset |
+| `TOON_TRU_BIN` | Path to the `tru` binary (preferred) | unset |
+| `TOON_BIN` | Alternate path to the `tru` binary | unset |
+| `TOON_STATS` | Emit token stats on stderr (set to `1`) | unset |
 
 ### Installer Variables
 

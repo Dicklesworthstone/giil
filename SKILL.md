@@ -22,7 +22,7 @@ Set up complex file sync between devices
 
 **With giil:**
 ```bash
-giil "https://share.icloud.com/photos/0a1Abc_xYz..." --json
+giil "https://share.icloud.com/photos/0a1Abc_xYz..." --format json
 # {"path": "/tmp/icloud_20240115_143022.jpg", "width": 1170, ...}
 ```
 
@@ -54,7 +54,7 @@ curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/giil/main/instal
 giil "https://share.icloud.com/photos/02cD9okNHvVd-uuDnPCH3ZEEA"
 
 # JSON output (best for AI workflows)
-giil "https://share.icloud.com/photos/..." --json
+giil "https://share.icloud.com/photos/..." --format json
 
 # Download entire album
 giil "https://share.icloud.com/photos/..." --all --output ~/album
@@ -117,8 +117,9 @@ giil <url> [options]
 | `--preserve` | off | Keep original bytes (skip MozJPEG compression) |
 | `--convert FMT` | — | Convert to: `jpeg`, `png`, `webp` |
 | `--quality N` | `85` | JPEG quality 1-100 |
+| `--format FMT` | — | Structured output format: `json` or `toon` |
 | `--base64` | off | Output base64 to stdout (no file saved) |
-| `--json` | off | Output JSON metadata |
+| `--json` | off | Output JSON metadata (alias for `--format json`) |
 | `--all` | off | Download all photos from album |
 | `--timeout N` | `60` | Page load timeout in seconds |
 | `--debug` | off | Save debug artifacts on failure |
@@ -142,10 +143,10 @@ giil "https://share.icloud.com/photos/XXX"
 IMAGE_PATH=$(giil "..." --output ~/Downloads 2>/dev/null)
 ```
 
-### JSON Mode
+### JSON Mode (`--format json` or `--json`)
 
 ```bash
-giil "https://share.icloud.com/photos/XXX" --json
+giil "https://share.icloud.com/photos/XXX" --format json
 ```
 
 **Success:**
@@ -183,6 +184,14 @@ giil "https://share.icloud.com/photos/XXX" --json
 | `method` | Capture strategy: `download`, `network`, `element-screenshot`, `viewport-screenshot`, `direct` |
 | `error.code` | Error code (see Exit Codes) |
 | `error.remediation` | Suggested fix |
+
+### TOON Mode (`--format toon`)
+
+```bash
+giil "https://share.icloud.com/photos/XXX" --format toon
+```
+
+Outputs the same metadata envelope as JSON, but encoded as TOON. Requires the `tru` binary from `toon_rust`.
 
 ### Base64 Mode
 
@@ -235,9 +244,20 @@ giil "https://share.icloud.com/photos/XXX" --all --output ~/album
 /path/to/album/icloud_20240115_143245_001.jpg
 /path/to/album/icloud_20240115_143246_002.jpg
 
-# With --json
+# With --format json (or --json)
 {"path": "...001.jpg", "method": "download", "width": 4032, ...}
 {"path": "...002.jpg", "method": "network", "width": 3024, ...}
+
+# With --format toon
+ok: true
+path: ...001.jpg
+method: download
+width: 4032
+
+ok: true
+path: ...002.jpg
+method: network
+width: 3024
 ```
 
 ## Image Processing Pipeline

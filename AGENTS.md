@@ -95,7 +95,8 @@ This is a **hybrid project**: a Bash wrapper script with an embedded Node.js ext
 | `--convert FMT` | — | Convert to format: `jpeg`, `png`, `webp` |
 | `--quality N` | `85` | JPEG quality (1-100) |
 | `--base64` | off | Output base64 to stdout instead of saving file |
-| `--json` | off | Output JSON metadata (path, datetime, dimensions, method) |
+| `--format FMT` | — | Structured output format: `json` or `toon` |
+| `--json` | off | Output JSON metadata (alias for `--format json`) |
 | `--all` | off | Download all photos from a shared album |
 | `--timeout N` | `60` | Page load timeout in seconds |
 | `--debug` | off | Save debug artifacts (screenshot + HTML) on failure |
