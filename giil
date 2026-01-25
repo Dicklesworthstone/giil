@@ -537,13 +537,17 @@ resolve_output_format() {
         json|toon|path|base64)
             ;;
         *)
-            log_error "Invalid output format: ${resolved} (expected json|toon)"
+            log_error "Invalid output format: ${resolved} (expected json|toon|path|base64)"
             exit "$EXIT_USAGE_ERROR"
             ;;
     esac
 
     OUTPUT_FORMAT="$resolved"
     OUTPUT_FORMAT_SOURCE="$source"
+
+    if [[ "$OUTPUT_FORMAT" == "base64" ]]; then
+        BASE64_OUTPUT=true
+    fi
 
     if [[ "$OUTPUT_FORMAT" == "json" || "$OUTPUT_FORMAT" == "toon" ]]; then
         JSON_OUTPUT=true
@@ -2861,10 +2865,19 @@ download_dropbox_direct() {
         datetime=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
         local json_payload
-        json_payload=$(cat << EOF
+        if [[ "$BASE64_OUTPUT" == "true" ]]; then
+            local base64_data
+            base64_data=$(base64 < "$final_path" | tr -d '\r\n')
+            json_payload=$(cat << EOF
+{"ok":true,"schema_version":"1","platform":"dropbox","base64":"${base64_data}","datetime":"${datetime}","method":"direct"}
+EOF
+)
+        else
+            json_payload=$(cat << EOF
 {"ok":true,"schema_version":"1","platform":"dropbox","path":"${final_path}","method":"direct","size":${file_size},"width":${width},"height":${height},"datetime":"${datetime}","sourceUrl":"${raw_url}"}
 EOF
 )
+        fi
 
         if [[ "$OUTPUT_FORMAT" == "toon" ]]; then
             encode_json_to_toon "$json_payload"
