@@ -1,6 +1,9 @@
 .ci-cache/
 .ci-output/
 
+# macOS metadata
+.DS_Store
+
 # bv (beads viewer) local config and caches
 .bv/
 node_modules/
