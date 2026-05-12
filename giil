@@ -792,6 +792,141 @@ detect_os() {
 }
 
 # -----------------------------------------------------------------------------
+# Ubuntu Version Detection (for the 24.04 libasound2t64 quirk, issue #1)
+# -----------------------------------------------------------------------------
+# Reads /etc/os-release for the version triple. Echoes the version-id
+# (e.g. "24.04") on Ubuntu, or empty when the host is not Ubuntu or
+# os-release is missing.
+#
+# Used to gate the libasound2 -> libasound2t64 equivs workaround: on
+# 24.04+, the upstream `libasound2` package was renamed and Playwright's
+# `install --with-deps` still requests the old name, so apt errors out.
+ubuntu_version_id() {
+    [[ -f /etc/os-release ]] || return 0
+    local id="" version_id=""
+    while IFS='=' read -r key value; do
+        value="${value%\"}"
+        value="${value#\"}"
+        case "$key" in
+            ID)         id="$value" ;;
+            VERSION_ID) version_id="$value" ;;
+        esac
+    done < /etc/os-release
+    [[ "$id" == "ubuntu" ]] || return 0
+    printf '%s' "$version_id"
+}
+
+# Compare two dotted version strings. Echoes the larger of $1 and $2.
+# Pure shell, avoids spawning sort -V for an idempotency-critical path.
+version_max() {
+    # printf is the cheapest way to compare without forking sort.
+    # On equality we return $2 (no preference).
+    if [[ "$1" == "$2" ]]; then
+        printf '%s' "$2"
+    elif [[ "$1" == "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" ]]; then
+        printf '%s' "$1"
+    else
+        printf '%s' "$2"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Ubuntu 24.04 libasound2 Compatibility Shim (issue #1)
+# -----------------------------------------------------------------------------
+# Playwright's `install --with-deps` calls `apt install libasound2`,
+# but Ubuntu 24.04 renamed the package to `libasound2t64` as part of
+# the t64 ABI transition. apt rejects the old name with "Package
+# libasound2 is a virtual package" and Playwright bubbles up a
+# "Failed to install browsers" error.
+#
+# The canonical Debian/Ubuntu workaround is to install libasound2t64
+# directly + register an equivs dummy package that satisfies anything
+# still asking for "libasound2". Both are needed: dropping just t64 is
+# insufficient because Playwright's installer probes for the literal
+# old name.
+#
+# This function is idempotent — re-running is a no-op if the dummy
+# package is already installed. Requires sudo; logs a clear warning
+# when sudo is unavailable so operators see why Playwright then fails.
+ensure_libasound2_compat_for_ubuntu_2404() {
+    local version=""
+    version="$(ubuntu_version_id)"
+    [[ -n "$version" ]] || return 0
+    # 24.04+ only. 22.04 and earlier still ship the original libasound2
+    # so don't touch them — the dummy package would mask future warnings.
+    if [[ "$(version_max "$version" "24.04")" != "$version" ]]; then
+        return 0
+    fi
+
+    # Fast path: dummy already present.
+    if dpkg-query -W -f='${Status}' libasound2 2>/dev/null | grep -q "install ok installed"; then
+        return 0
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        log_warn "Ubuntu ${version} detected — Playwright will request 'libasound2'"
+        log_warn "but the package was renamed to 'libasound2t64' in 24.04. Install"
+        log_warn "the workaround manually before retrying:"
+        log_warn "  sudo apt install -y libasound2t64 equivs"
+        log_warn "  # then build an equivs dummy 'libasound2' package per giil README"
+        return 0
+    fi
+
+    log_step "Ubuntu ${version} detected; staging libasound2t64 + equivs dummy package (issue #1)..."
+
+    if ! sudo apt-get update -qq 2>/dev/null; then
+        log_warn "apt-get update failed; libasound2 shim may install with stale indexes"
+    fi
+
+    if ! sudo apt-get install -y --no-install-recommends libasound2t64 equivs >&2; then
+        log_error "Failed to install libasound2t64 + equivs. Playwright will likely fail next."
+        return 1
+    fi
+
+    # Build the equivs dummy inside a temp dir we own so we don't pollute
+    # the user's CWD or leave .deb artifacts around. Use a stable name
+    # so retries are idempotent.
+    local equivs_dir
+    equivs_dir="$(mktemp -d /tmp/giil-libasound2-equivs.XXXXXX)" || {
+        log_error "mktemp failed"
+        return 1
+    }
+    # shellcheck disable=SC2064
+    trap "rm -rf '$equivs_dir'" RETURN
+
+    cat > "${equivs_dir}/libasound2.control" <<'EQUIVS_EOF'
+Section: misc
+Priority: optional
+Standards-Version: 4.5.0
+
+Package: libasound2
+Version: 1.2.11-1ubuntu0.giil
+Provides: libasound2
+Depends: libasound2t64
+Architecture: all
+Description: Compatibility dummy package for Playwright on Ubuntu 24.04+
+ Forwards 'libasound2' requests to libasound2t64 after the t64 ABI
+ transition renamed the upstream package. Maintained by giil's
+ ensure_libasound2_compat_for_ubuntu_2404 helper (issue #1).
+EQUIVS_EOF
+
+    (
+        cd "$equivs_dir" || exit 1
+        if ! equivs-build libasound2.control >/dev/null 2>&1; then
+            exit 1
+        fi
+        if ! sudo dpkg -i libasound2_*.deb >&2; then
+            exit 1
+        fi
+    ) || {
+        log_error "Failed to build/install equivs libasound2 dummy package."
+        return 1
+    }
+
+    log_info "libasound2 dummy package installed; Playwright deps should now resolve."
+}
+
+# -----------------------------------------------------------------------------
 # Platform Detection (Cloud Service Identification)
 # -----------------------------------------------------------------------------
 # Detects which cloud service a URL belongs to.
@@ -1059,6 +1194,12 @@ PACKAGE_EOF
             local os
             os=$(detect_os)
             if [[ "$os" == "linux" ]]; then
+                # Pre-stage the libasound2 compatibility shim on Ubuntu
+                # 24.04+ before the with-deps install runs, otherwise
+                # Playwright's apt invocation fails on the renamed
+                # package (issue #1). No-op on other Linux distros and
+                # Ubuntu < 24.04.
+                ensure_libasound2_compat_for_ubuntu_2404 || true
                 log_warn "Trying with system dependencies (may require sudo)..."
                 if ! npx playwright install --with-deps chromium 2>&1 | sed '/^$/d' >&2; then
                     log_error "Failed to install Chromium. Try manually:"
