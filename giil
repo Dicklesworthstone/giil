@@ -1246,7 +1246,7 @@ PACKAGE_EOF
 create_extractor_script() {
     local script_path="${GIIL_HOME}/extractor.mjs"
 
-    cat > "$script_path" << 'SCRIPT_EOF'
+    if ! cat > "$script_path" << 'SCRIPT_EOF'
 import { chromium } from 'playwright';
 import sharp from 'sharp';
 import exifr from 'exifr';
@@ -3153,6 +3153,10 @@ async function runSingle(ctx) {
     process.exit(ExitCodes.INTERNAL_ERROR);
 });
 SCRIPT_EOF
+    then
+        log_error "Failed to write extractor script: $script_path"
+        return "$EXIT_DEPENDENCY_ERROR"
+    fi
 
     echo "$script_path"
 }
