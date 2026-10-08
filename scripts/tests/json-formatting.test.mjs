@@ -18,7 +18,7 @@ describe('JSON Formatting Tests', () => {
     let formatJsonSuccess;
     let formatJsonError;
     let errorCodeToExit;
-    let setCurrentPlatform;
+    let ctx;
     let ExitCodes;
     let tempModule;
 
@@ -34,7 +34,6 @@ describe('JSON Formatting Tests', () => {
         formatJsonSuccess = mod.formatJsonSuccess;
         formatJsonError = mod.formatJsonError;
         errorCodeToExit = mod.errorCodeToExit;
-        setCurrentPlatform = mod.setCurrentPlatform;
         ExitCodes = mod.ExitCodes;
     });
 
@@ -47,27 +46,27 @@ describe('JSON Formatting Tests', () => {
     describe('formatJsonSuccess', () => {
     beforeEach(() => {
         // Reset platform before each test
-        setCurrentPlatform('icloud');
+        ctx = { currentPlatform: 'icloud' };
     });
 
     it('returns object with schema_version "1"', () => {
-        const result = formatJsonSuccess({});
+        const result = formatJsonSuccess(ctx, {});
         assert.strictEqual(result.schema_version, '1');
     });
 
     it('returns object with ok: true', () => {
-        const result = formatJsonSuccess({});
+        const result = formatJsonSuccess(ctx, {});
         assert.strictEqual(result.ok, true);
     });
 
     it('includes current platform', () => {
-        setCurrentPlatform('dropbox');
-        const result = formatJsonSuccess({});
+        ctx.currentPlatform = 'dropbox';
+        const result = formatJsonSuccess(ctx, {});
         assert.strictEqual(result.platform, 'dropbox');
     });
 
     it('merges provided data into result', () => {
-        const result = formatJsonSuccess({
+        const result = formatJsonSuccess(ctx, {
             path: '/tmp/test.jpg',
             method: 'download-button'
         });
@@ -85,7 +84,7 @@ describe('JSON Formatting Tests', () => {
             height: 1080,
             size: 123456
         };
-        const result = formatJsonSuccess(data);
+        const result = formatJsonSuccess(ctx, data);
 
         assert.strictEqual(result.path, data.path);
         assert.strictEqual(result.datetime, data.datetime);
@@ -99,46 +98,56 @@ describe('JSON Formatting Tests', () => {
     it('works with all supported platforms', () => {
         const platforms = ['icloud', 'dropbox', 'gphotos', 'gdrive', 'unknown'];
         for (const platform of platforms) {
-            setCurrentPlatform(platform);
-            const result = formatJsonSuccess({});
+            ctx.currentPlatform = platform;
+            const result = formatJsonSuccess(ctx, {});
             assert.strictEqual(result.platform, platform);
         }
+    });
+
+    it('keeps simultaneous job platforms isolated', () => {
+        const drive = { currentPlatform: 'gdrive' };
+        const dropbox = { currentPlatform: 'dropbox' };
+        assert.strictEqual(formatJsonSuccess(drive, {}).platform, 'gdrive');
+        assert.strictEqual(formatJsonSuccess(dropbox, {}).platform, 'dropbox');
+        assert.strictEqual(formatJsonError(drive, 'NOT_FOUND', 'Missing').platform, 'gdrive');
+        assert.strictEqual(formatJsonSuccess(dropbox, {}).platform, 'dropbox');
     });
 });
 
 describe('formatJsonError', () => {
     beforeEach(() => {
-        setCurrentPlatform('icloud');
+        ctx = { currentPlatform: 'icloud' };
     });
 
     it('returns object with schema_version "1"', () => {
-        const result = formatJsonError('TEST_ERROR', 'Test message');
+        const result = formatJsonError(ctx, 'TEST_ERROR', 'Test message');
         assert.strictEqual(result.schema_version, '1');
     });
 
     it('returns object with ok: false', () => {
-        const result = formatJsonError('TEST_ERROR', 'Test message');
+        const result = formatJsonError(ctx, 'TEST_ERROR', 'Test message');
         assert.strictEqual(result.ok, false);
     });
 
     it('includes current platform', () => {
-        setCurrentPlatform('gphotos');
-        const result = formatJsonError('TEST_ERROR', 'Test message');
+        ctx.currentPlatform = 'gphotos';
+        const result = formatJsonError(ctx, 'TEST_ERROR', 'Test message');
         assert.strictEqual(result.platform, 'gphotos');
     });
 
     it('includes error code in error object', () => {
-        const result = formatJsonError('NETWORK_ERROR', 'Connection failed');
+        const result = formatJsonError(ctx, 'NETWORK_ERROR', 'Connection failed');
         assert.strictEqual(result.error.code, 'NETWORK_ERROR');
     });
 
     it('includes message in error object', () => {
-        const result = formatJsonError('AUTH_REQUIRED', 'Login required');
+        const result = formatJsonError(ctx, 'AUTH_REQUIRED', 'Login required');
         assert.strictEqual(result.error.message, 'Login required');
     });
 
     it('includes remediation when provided', () => {
         const result = formatJsonError(
+            ctx,
             'AUTH_REQUIRED',
             'Login required',
             'Please enable public sharing'
@@ -147,12 +156,12 @@ describe('formatJsonError', () => {
     });
 
     it('omits remediation when null', () => {
-        const result = formatJsonError('CAPTURE_FAILURE', 'All strategies failed', null);
+        const result = formatJsonError(ctx, 'CAPTURE_FAILURE', 'All strategies failed', null);
         assert.strictEqual(result.error.remediation, undefined);
     });
 
     it('omits remediation when not provided', () => {
-        const result = formatJsonError('CAPTURE_FAILURE', 'All strategies failed');
+        const result = formatJsonError(ctx, 'CAPTURE_FAILURE', 'All strategies failed');
         assert.strictEqual(result.error.remediation, undefined);
     });
 
@@ -168,7 +177,7 @@ describe('formatJsonError', () => {
 
         for (const [code, message] of errorCases) {
             it(`handles ${code} error code`, () => {
-                const result = formatJsonError(code, message);
+                const result = formatJsonError(ctx, code, message);
                 assert.strictEqual(result.error.code, code);
                 assert.strictEqual(result.error.message, message);
             });

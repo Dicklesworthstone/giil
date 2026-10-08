@@ -48,10 +48,10 @@ const extractors = [
     { name: 'validateImageContent', pattern: /function validateImageContent\(buffer, contentType = null, debugMode = false\) \{[\s\S]*?^\}/m },
 
     // formatJsonSuccess function (v3 JSON schema)
-    { name: 'formatJsonSuccess', pattern: /function formatJsonSuccess\(data\) \{[\s\S]*?^\}/m },
+    { name: 'formatJsonSuccess', pattern: /function formatJsonSuccess\(ctx, data\) \{[\s\S]*?^\}/m },
 
     // formatJsonError function (v3 JSON schema)
-    { name: 'formatJsonError', pattern: /function formatJsonError\(code, message, remediation = null\) \{[\s\S]*?^\}/m },
+    { name: 'formatJsonError', pattern: /function formatJsonError\(ctx, code, message, remediation = null\) \{[\s\S]*?^\}/m },
 
     // errorCodeToExit mapping
     { name: 'errorCodeToExit', pattern: /const errorCodeToExit = \{[\s\S]*?\};/ },
@@ -113,18 +113,11 @@ output += `/**
  * Generated: ${new Date().toISOString()}
  */
 
-// Mutable platform variable for testing JSON formatting functions
-// In production this is set from detectPlatform(url), but tests can set it directly
-let currentPlatform = 'unknown';
-export function setCurrentPlatform(platform) {
-    currentPlatform = platform;
-}
-
 `;
 
 output += functionsOutput;
 
-// Add exports (setCurrentPlatform is already exported inline above)
+// Add exports
 // Only export functions that were actually extracted
 if (extractedFunctions.length > 0) {
     output += `// Exports for testing\nexport {\n    ${extractedFunctions.join(',\n    ')}\n};\n`;
