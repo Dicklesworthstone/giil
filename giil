@@ -3048,7 +3048,7 @@ async function runBatch(ctxs, concurrency) {
             if (ctx.jsonOutput) {
                 console.log(JSON.stringify(formatJsonError(ctx, errorCode, err.message, remediation)));
             }
-            if (exitCode !== ExitCodes.SUCCESS) worstExit = exitCode;
+            worstExit = Math.max(worstExit, exitCode);
         }
     };
 
@@ -3519,12 +3519,17 @@ main() {
     # download_dropbox_direct reads the global URL and calls `exit` on success,
     # so for >1 total URL run it in a subshell to survive that exit (matches the
     # prior multi-URL behavior). For a lone Dropbox URL keep the direct exit.
-    local _dbx_index=0
+    local _dbx_index=0 _failure=0 _rc=0
     for URL in "${_dropbox_urls[@]}"; do
         _dbx_index=$((_dbx_index + 1))
         if [[ $_giil_url_total -gt 1 ]]; then
             log_info "Dropbox URL $_dbx_index of ${#_dropbox_urls[@]} (direct download)"
-            ( download_dropbox_direct ) || log_warn "Dropbox URL $_dbx_index failed"
+            _rc=0
+            ( download_dropbox_direct ) || _rc=$?
+            if [[ $_rc -ne 0 ]]; then
+                log_warn "Dropbox URL $_dbx_index failed (exit $_rc)"
+                [[ $_rc -le $_failure ]] || _failure=$_rc
+            fi
         else
             download_dropbox_direct
         fi
@@ -3572,26 +3577,35 @@ main() {
                 if [[ "$URL" =~ share\.icloud\.com/photos/([A-Za-z0-9_+/=-]+) ]]; then
                     URL="https://www.icloud.com/photos/#${BASH_REMATCH[1]}"
                 fi
+                _rc=0
                 if [[ "$OUTPUT_FORMAT" == "toon" ]]; then
-                    node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE" | encode_json_lines_to_toon || log_warn "URL failed: $URL"
+                    node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE" | encode_json_lines_to_toon || _rc=$?
                 else
-                    node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE" || log_warn "URL failed: $URL"
+                    node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE" || _rc=$?
+                fi
+                if [[ $_rc -ne 0 ]]; then
+                    log_warn "URL failed: $URL (exit $_rc)"
+                    [[ $_rc -le $_failure ]] || _failure=$_rc
                 fi
             done
         else
             # Multiple Playwright URLs -> ONE batch run, ONE browser, N tabs.
-            run_playwright_batch _pw_urls
+            _rc=0
+            run_playwright_batch "${_pw_urls[@]}" || _rc=$?
+            [[ $_rc -le $_failure ]] || _failure=$_rc
         fi
     fi
+
+    # Keep successful outputs, but never report success when a requested URL
+    # failed. Use the highest documented status regardless of completion order.
+    return "$_failure"
 }
 
-# Build a JSON jobs array for the URLs in the named array and run extractor.mjs
+# Build a JSON jobs array for the positional URLs and run extractor.mjs
 # in --batch mode (one launched browser, bounded-concurrency tabs). Shared CLI
 # flags (quality, output, format, etc.) are copied into every job; only the URL
 # varies. Honors GIIL_BATCH_CONCURRENCY (default 3). (#4)
 run_playwright_batch() {
-    local -n _urls_ref="$1"
-
     local concurrency="${GIIL_BATCH_CONCURRENCY:-3}"
     [[ "$concurrency" =~ ^[0-9]+$ ]] || concurrency=3
     [[ "$concurrency" -lt 1 ]] && concurrency=1
@@ -3600,13 +3614,16 @@ run_playwright_batch() {
     # parseable; in TOON mode we ask for json then transcode. In path/base64
     # mode the extractor still prints the bare path/base64 per job.
     local jobs_file
-    jobs_file=$(mktemp "${TMPDIR:-/tmp}/giil-jobs.XXXXXX.json")
+    jobs_file=$(mktemp "${TMPDIR:-/tmp}/giil-jobs.XXXXXX.json") || {
+        log_error "Failed to create batch jobs file"
+        return "$EXIT_INTERNAL_ERROR"
+    }
 
     # Build the JSON array with a small node helper so URLs are escaped safely
     # (URLs can contain ", \, #, & etc.). We pass URLs via argv after a marker.
     local u norm
     local -a norm_urls=()
-    for u in "${_urls_ref[@]}"; do
+    for u in "$@"; do
         norm="$u"
         if [[ "$norm" =~ share\.icloud\.com/photos/([A-Za-z0-9_+/=-]+) ]]; then
             norm="https://www.icloud.com/photos/#${BASH_REMATCH[1]}"
@@ -3656,7 +3673,7 @@ run_playwright_batch() {
     ' "${norm_urls[@]}" > "$jobs_file" || {
         log_error "Failed to build batch jobs file"
         rm -f "$jobs_file"
-        return 1
+        return "$EXIT_INTERNAL_ERROR"
     }
 
     log_info "Single-browser batch: ${#norm_urls[@]} URLs, concurrency ${concurrency}"
@@ -3672,7 +3689,7 @@ run_playwright_batch() {
     if [[ $rc -ne 0 ]]; then
         log_warn "One or more URLs failed in the batch (exit $rc)"
     fi
-    return 0
+    return "$rc"
 }
 
 main "$@"
