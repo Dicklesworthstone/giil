@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/version-3.0.0-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-3.3.0-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blueviolet?style=for-the-badge" alt="Platform" />
   <img src="https://img.shields.io/badge/runtime-Node.js%2018+-purple?style=for-the-badge" alt="Runtime" />
   <img src="https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue-the-badge" alt="License" />
@@ -27,7 +27,7 @@
 <p align="center">
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/giil/main/install.sh?v=3.0.0" | bash
+curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/giil/main/install.sh?v=3.3.0" | bash
 ```
 
 </p>
@@ -212,7 +212,7 @@ MozJPEG compression by default:
 
 **One-liner (recommended):**
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/giil/main/install.sh?v=3.0.0" | bash
+curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/giil/main/install.sh?v=3.3.0" | bash
 ```
 
 <details>
@@ -1638,7 +1638,7 @@ giil integrates with [gum](https://github.com/charmbracelet/gum) for beautiful t
 │                                                                   │
 │   ╔════════════════════════════════════════════════════════════╗ │
 │   ║                           giil                              ║ │
-│   ║          Get Image [from] Internet Link v3.0.0              ║ │
+│   ║          Get Image [from] Internet Link v3.3.0              ║ │
 │   ╚════════════════════════════════════════════════════════════╝ │
 │                                                                   │
 │   ◐ Launching browser...                                          │
