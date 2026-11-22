@@ -90,14 +90,14 @@ This is a **hybrid project**: a Bash wrapper script with an embedded Node.js ext
 
 - The extractor is embedded in the giil script as a heredoc — regenerated fresh each run.
 - Use ES modules (`"type": "module"` in package.json).
-- Target **Node.js 18+**.
+- Target **Node.js 20.10+** (required by Playwright 1.65 and Sharp 0.35 ESM import attributes).
 
 ### Key Dependencies
 
 | Dependency | Purpose |
 |------------|---------|
-| **Playwright** 1.40.0 | Browser automation (Chromium headless) |
-| **Sharp** 0.33.0 | Image processing with MozJPEG compression |
+| **Playwright** 1.65.1 | Browser automation (Chromium headless) |
+| **Sharp** 0.35.5 | Image processing with MozJPEG compression |
 | **exifr** 7.1.3 | EXIF metadata parsing and datetime extraction |
 | **curl** | Installer and direct downloads (Dropbox) |
 | **sips** (macOS) / **heif-convert** (Linux) | HEIC/HEIF conversion |

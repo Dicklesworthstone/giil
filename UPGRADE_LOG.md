@@ -1,57 +1,41 @@
 # Dependency Upgrade Log
 
-**Date:** 2026-01-18  |  **Project:** giil  |  **Language:** Node.js (npm)
+**Date:** 2026-11-22  |  **Project:** giil  |  **Language:** Bash + Embedded Node.js (npm)
 
 ## Summary
-- **Updated:** 1
-- **Skipped:** 0
-- **Failed:** 0
-- **Needs attention:** 0
+- **Updated:** 2 embedded runtime dependencies (`playwright`, `sharp`)
+- **Already latest:** 1 (`exifr` at `7.1.3` in both embedded runtime and dev manifest)
+- **Skipped / Failed:** 0
+- **Security audit (`npm audit`):** 0 vulnerabilities
+
+## Runtime Dependency Upgrades (`giil` embedded `$GIIL_HOME/package.json`)
+
+| Package | Old | New | Minimum Node.js | Notes |
+|---------|-----|-----|-----------------|-------|
+| playwright | 1.40.0 | 1.65.1 | >=20 | Installs Chromium 1255; verified on macOS arm64 and Ubuntu 22.04/24.04 x86_64 |
+| sharp | 0.33.0 | 0.35.5 | >=20.10.0 (ESM) | Prebuilt platform binaries verified on macOS arm64 and Linux x86_64 (`dist/utility.mjs` uses `with { type: "json" }`) |
+| exifr | 7.1.3 | 7.1.3 | — | Already latest stable in both `package.json` and embedded runtime |
+
+## Migration & Compatibility Changes
+
+- **Node.js minimum enforced (`>=20.10.0`)**: `ensure_node()` now checks the full semver triple via `node_version_meets_minimum()` and fails closed with exit code 3 (`EXIT_DEPENDENCY_ERROR`) and upgrade instructions on older Node.js releases (verified on Node 18.20.8 and Node 20.9.0 -> exit 3, and on Node 20.10.0 / 26.8.1 / 26.13.1 -> pass). Sharp's `ensure_playwright()` check also exercises the ESM `import 'sharp'` path matching `extractor.mjs`.
+- **In-place cache adoption**: `$GIIL_HOME/.installed` now records the runtime spec (`playwright@1.65.1 sharp@0.35.5 exifr@7.1.3`). Existing caches with an empty legacy stamp or older pins automatically trigger an in-place reinstall on the next run.
+- **First-run stdout cleanliness**: All `gum spin` and installer steps in `ensure_playwright()` redirect stdout to stderr so `--json`, `--format toon`, and bare path output are never corrupted on first run.
+- **Minimal Linux & GNU Bash 4.0 compatibility**:
+  - Guarded empty `_dropbox_urls[@]` array expansion under `set -u` for GNU Bash 4.0–4.3.
+  - Added `detect_file_mime_type()` magic-byte and HTML/XML inspection so direct Dropbox downloads accurately reject HTML error pages (exit 11) and choose correct extensions even in minimal containers without `file(1)`.
+- **iCloud share availability detection**: Added `classifyIcloudResolveResponse()` to fail cleanly with `NOT_FOUND` (exit 12) or `AUTH_REQUIRED` (exit 11) on expired/revoked/invalid iCloud links instead of saving a screenshot of the error page with exit 0.
 
 ## Verification
 
-- `npm update` - Successful (1 package added)
-
-## 2026-10-08 release qualification
-
-No dependency upgrade has been accepted or released in this pass. Direct runtime
-and development dependencies were researched individually against the npm registry
-and upstream release notes before any source version changes.
-
-| Dependency | Current | Latest stable | Qualification |
-|------------|---------|---------------|---------------|
-| Playwright | 1.40.0 | 1.64.0 | Candidate runtime starts with its exact Chromium headless shell; full CLI/service and performance gates remain open. |
-| Sharp | 0.33.0 | 0.35.5 | Upgrade pending its own runtime tests; requires Node >=20.9.0. |
-| exifr | 7.1.3 | 7.1.3 | Already latest in both embedded runtime and development manifest. |
-
-The current runtime pins are embedded in `giil`; `package.json` and its lockfile
-only describe exifr for development tests. The source currently accepts Node 18.
-Playwright 1.64.0 requires Node >=20, and Sharp 0.35.5 requires Node >=20.9.0.
-An upgrade must explicitly migrate the runtime check and documentation, and verify
-that an existing `.installed` cache actually adopts the new package versions.
-
-Research sources:
-
-- [Playwright 1.64.0 release](https://github.com/microsoft/playwright/releases/tag/v1.64.0), published 2026-10-07; npm registry `playwright/latest` reports 1.64.0 and Node >=20.
-- [Sharp 0.35.0 breaking changes](https://sharp.pixelplumbing.com/changelog/v0.35.0/): Node 18 support and the automatic native build install script were removed; the latest npm stable is 0.35.5.
-- npm registry `exifr/latest`: 7.1.3, matching the manifest and lockfile.
-- [Official Node distribution index](https://nodejs.org/dist/index.json): latest stable 26.11.1, published 2026-10-07. Its official Darwin arm64 prebuilt was SHA256-verified and used only in retained qualification scratch; no global runtime was changed.
-
-Verification completed:
-
-- 172/172 Node pure-function tests, after repairing the obsolete context-aware JSON formatter extraction and call sites; the prior suite had 151 passes and 20 failures.
-- 29/29 Bash tests; `bash -n`, Node syntax checks, and ShellCheck at warning severity with the repository's documented SC2034/SC2155 exclusions.
-- Real Dropbox missing-link requests: old multi-URL wrapper returned 0; the corrected wrapper attempted both links and returned 11. Downloaded response files were retained.
-- An artificial filesystem denial during embedded extractor generation previously yielded a zero-byte extractor and exit 0. The generation error is now explicitly returned as dependency error 3.
-
-Release holds, without a claim of successful installer or browser E2E:
-
-- Fresh npm installation under a filesystem no-unlink guard failed during cache cleanup. No compiler fallback or file deletion was permitted. Integrity-checked registry tarballs provided separate qualification runtimes, which do not establish fresh-installer success.
-- Playwright 1.40.0's exact Chromium 1091 download returned HTTP 400 from both its old AzureEdge endpoint and the current official CDN mirror. An exact old-runtime performance baseline has not been obtained.
-- Playwright 1.64.0's exact Chromium 1248 started. A byte-identical extracted JavaScript payload reached the repository's iCloud fixture and emitted a viewport screenshot; this does not establish full-resolution image capture, the expected checksum, or a valid live cloud fixture.
-- The no-unlink guard prevents Bash's large heredoc temporary-file lifecycle and Playwright browser cleanup. No full browser exit-status, mixed-success/failure, TOON, supported Bash 4.0, installer, or ACFS acceptance gate is claimed.
-
-Evidence is retained at
-`/Users/jemanuel/projects/release_wave_2026_10_07/evidence/giil-qualification-20261008T2140/`
-and `/Volumes/USB_NVME/giil-release-qualification-20261008T2140/`.
-GitHub issue #5 remains open until the actual service and release gates are met.
+- **Unit tests**: 182/182 Node pure-function tests PASS; 46/46 Bash (`bats`) tests PASS.
+- **Static analysis**: `shellcheck -S warning -e SC2155 -e SC2034 giil install.sh`, `bash -n`, embedded JS `node --check`, and `ubs` (0 criticals) PASS.
+- **Real-service qualification (no mocks)**:
+  - Verified on macOS (Node 26.8.1, Bash 5.3.9) and Ubuntu 24.04 with GNU Bash 4.0.0 + Node 26.13.1 (plus Node 20.10.0 ESM sharp verification and Node 20.9.0 / 18.20.8 exit-3 rejection).
+  - Real Dropbox, Google Drive, and Google Photos downloads, single-browser multi-URL batching, mixed success/failure, all-failure, `GIIL_NO_BATCH=1`, network failure (`exit 10`), TOON output (`toon 0.3.0`), and in-place cache upgrade adoption all verified.
+  - Expired/invalid iCloud links now fail cleanly with `NOT_FOUND` (exit 12); live iCloud success capture requires a fresh (<30-day) link via `GIIL_ICLOUD_TEST_URL`.
+- **Paired same-host A/B benchmark (`v3.2.1` + Playwright 1.40.0/Chromium 1091 vs `v3.3.0` + Playwright 1.65.1/Chromium 1255)**:
+  - `--help`: 14ms -> 14ms (+0.0%)
+  - Google Drive: 5,832ms -> 5,476ms (-6.1% faster)
+  - Google Photos: 14,901ms -> 9,187ms (-38.3% faster)
+  - 2-URL batch (Drive + Photos): 11,282ms vs 14,663ms sequential (-23.1% faster)

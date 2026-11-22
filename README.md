@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/version-3.3.0-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blueviolet?style=for-the-badge" alt="Platform" />
-  <img src="https://img.shields.io/badge/runtime-Node.js%2018+-purple?style=for-the-badge" alt="Runtime" />
+  <img src="https://img.shields.io/badge/runtime-Node.js%2020.10+-purple?style=for-the-badge" alt="Runtime" />
   <img src="https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue-the-badge" alt="License" />
 </p>
 
@@ -1259,13 +1259,13 @@ extractor.mjs (embedded JavaScript, ~1,450 LOC)
 ```
 giil
  │
- ├── Node.js ≥18
+ ├── Node.js ≥20.10
  │    └── npm
  │
- ├── Playwright ^1.40.0
+ ├── Playwright 1.65.1
  │    └── Chromium (headless browser)
  │
- ├── Sharp ^0.33.0
+ ├── Sharp 0.35.5
  │    ├── libvips (native image library)
  │    └── MozJPEG encoder
  │
@@ -1310,7 +1310,7 @@ scripts/tests/
 ```
 
 **Test architecture:**
-- Tests use Node.js 18+ native test runner (`node:test`)
+- Tests use Node.js 20.10+ native test runner (`node:test`)
 - Functions are extracted from giil at test time (no separate source files)
 - Each test file independently extracts functions in its `before()` hook
 
@@ -1733,11 +1733,11 @@ GIIL_VERIFY=1 curl -fsSL .../install.sh | bash
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| Node.js | ≥18 | JavaScript runtime |
-| Playwright | ^1.40.0 | Browser automation |
+| Node.js | ≥20.10 | JavaScript runtime |
+| Playwright | 1.65.1 | Browser automation |
 | Chromium | (via Playwright) | Headless browser |
-| Sharp | ^0.33.0 | Image processing |
-| exifr | ^7.1.3 | EXIF metadata parsing |
+| Sharp | 0.35.5 | Image processing |
+| exifr | 7.1.3 | EXIF metadata parsing |
 | gum | latest | CLI styling (optional) |
 
 ### System Requirements

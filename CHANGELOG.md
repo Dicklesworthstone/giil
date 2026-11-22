@@ -8,6 +8,38 @@ Repository: <https://github.com/Dicklesworthstone/giil>
 
 ---
 
+## [v3.3.0] -- 2026-11-22
+
+**Multi-URL batches, honest exit codes, and a current browser runtime.** Closes [#5](https://github.com/Dicklesworthstone/giil/issues/5); builds on [#4](https://github.com/Dicklesworthstone/giil/issues/4).
+
+### Multi-URL downloads
+
+- Accept multiple URLs in one invocation ([5250df3](https://github.com/Dicklesworthstone/giil/commit/5250df39c39c768fc3c9748c99136fd466aaa90d)).
+- Reuse one headless browser across all Playwright-handled URLs, with bounded tab concurrency (`GIIL_BATCH_CONCURRENCY`, default 3) and isolated browser contexts per URL ([d15d7ba](https://github.com/Dicklesworthstone/giil/commit/d15d7ba1b7ea2d8491cf4948842b30cd59f00806)). `GIIL_NO_BATCH=1` keeps the per-URL path.
+- Failures are never reported as success: single, batch, and multi-Dropbox paths keep each child's exit status, every URL is still attempted, successful outputs are kept, and the run exits with the highest documented failure code. The Bash 4.3 `local -n` nameref was replaced with positional arguments and empty-array expansions are guarded under `set -u`, restoring GNU Bash 4.0 compatibility ([2af72f6](https://github.com/Dicklesworthstone/giil/commit/2af72f647c6ca040113a099f1b824d5b86c311f1)).
+- A failed write of the embedded extractor now exits with dependency error 3 instead of continuing with an empty script ([31386f8](https://github.com/Dicklesworthstone/giil/commit/31386f8247370b52c09f992ae5e9945620b92a39)).
+- Direct Dropbox downloads now inspect magic bytes and leading HTML/XML markers (`detect_file_mime_type`) before falling back to `file(1)`, so minimal Linux containers without `file` still reject HTML error pages with exit 11, assign accurate image extensions (including `.png` and `.avif`), and avoid overwriting files saved within the same second.
+
+### iCloud
+
+- Detect expired, revoked, and invalid iCloud shared links. iCloud renders a "Shared photos not available" page for these links, and the screenshot fallback used to save that page and exit 0. giil now reads iCloud's share-resolver status, which does not depend on the page language, and exits `NOT_FOUND` (12). Sign-in or permission failures exit `AUTH_REQUIRED` (11).
+- iCloud web-app assets (logos, wallpaper, and the internal `test_images/orientation_test_image.jpeg` probe) are no longer considered as captured content.
+- Note: iCloud links expire after 30 days. The default iCloud E2E fixture link has expired. Set `GIIL_ICLOUD_TEST_URL` and `GIIL_ICLOUD_EXPECTED_SHA` to qualify iCloud capture with a current link.
+
+### Runtime and dependencies
+
+- Embedded runtime upgraded: Playwright `1.40.0 -> 1.65.1` (Chromium 1255), Sharp `0.33.0 -> 0.35.5`, exifr `7.1.3` (already latest).
+- **Node.js 20.10.0 or newer is now required** (Playwright 1.65 requires Node >= 20; Sharp 0.35's ESM entry uses `import ... with { type: "json" }`, introduced in Node 20.10.0). Older Node versions (including 20.9.0 and 18.x) fail early with exit code 3 and upgrade instructions instead of failing partway through.
+- Existing caches built from older pins are upgraded in place on the next run. The runtime spec is recorded in `$GIIL_HOME/.installed`, and a missing or different stamp triggers a reinstall. Previously an existing cache was reused forever.
+- First-run installer output (npm, the Chromium download, progress bars) now always goes to stderr. With `gum` installed, the Chromium download progress was written to stdout and corrupted `--json`, `--format toon`, and path output on the first run.
+
+### Tests
+
+- Repaired the obsolete JSON-formatter extraction in the Node suite ([5269a3c](https://github.com/Dicklesworthstone/giil/commit/5269a3cdf4e7335ecaf429323353e78bb7c5cb25)). New iCloud share-status unit tests bring the suite to 182 tests.
+- Bash suite grows from 29 to 46 tests, adding Node minimum-version checks, cached-runtime adoption, stdout-leak guards for first-run installer steps, `file(1)`-free MIME/HTML detection, and Bash 4.0 empty-array safety.
+
+---
+
 ## [v3.2.1] -- 2026-05-22
 
 **HEIC brand coverage fix.** Follow-up to v3.2.0.
