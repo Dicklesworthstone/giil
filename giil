@@ -47,6 +47,19 @@ set -euo pipefail
 VERSION="3.3.0"
 
 # -----------------------------------------------------------------------------
+# Embedded runtime pins (installed into $GIIL_HOME on first run)
+# -----------------------------------------------------------------------------
+# Playwright >=1.50 requires Node.js >=20 and Sharp 0.35's ESM entry uses
+# `import ... with { type: "json" }`, which requires Node.js >=20.10.0. The
+# runtime spec is recorded in $GIIL_HOME/.installed so existing caches built
+# from older pins are upgraded in place on the next run instead of being reused.
+GIIL_PLAYWRIGHT_VERSION="1.65.1"
+GIIL_SHARP_VERSION="0.35.5"
+GIIL_EXIFR_VERSION="7.1.3"
+GIIL_MIN_NODE_VERSION="20.10.0"
+GIIL_RUNTIME_SPEC="playwright@${GIIL_PLAYWRIGHT_VERSION} sharp@${GIIL_SHARP_VERSION} exifr@${GIIL_EXIFR_VERSION}"
+
+# -----------------------------------------------------------------------------
 # Exit Codes (v3.0+ extended scheme with backwards compatibility)
 # -----------------------------------------------------------------------------
 # BREAKING CHANGE in v3.0: Codes 4 and 5 moved to 10 and 11.
@@ -1062,12 +1075,45 @@ ensure_node() {
     fi
 
     local node_version
-    node_version=$(node --version | sed 's/v//' | cut -d. -f1)
-    if [[ "$node_version" -lt 18 ]]; then
-        log_warn "Node.js v18+ recommended. Current: $(node --version)"
+    node_version=$(node --version 2>/dev/null | sed 's/^v//')
+    if ! node_version_meets_minimum "$node_version" "$GIIL_MIN_NODE_VERSION"; then
+        log_error "Node.js v${GIIL_MIN_NODE_VERSION}+ is required (found: ${node_version:-unknown})."
+        log_error "  Playwright ${GIIL_PLAYWRIGHT_VERSION} and Sharp ${GIIL_SHARP_VERSION} do not support older Node.js releases."
+        log_error "  Upgrade Node.js: https://nodejs.org/ (or 'brew upgrade node', nvm, fnm, etc.)"
+        exit "$EXIT_DEPENDENCY_ERROR"
     fi
 
-    log_debug "Node.js $(node --version)"
+    log_debug "Node.js v${node_version}"
+}
+
+# Returns 0 when dotted version $1 is >= dotted version $2 (numeric compare,
+# missing components treated as 0, pre-release/build suffixes ignored).
+node_version_meets_minimum() {
+    local have="${1%%[-+]*}" want="${2%%[-+]*}"
+    [[ "$have" =~ ^[0-9]+(\.[0-9]+)*$ ]] || return 1
+    local -a h w
+    IFS=. read -r -a h <<< "$have"
+    IFS=. read -r -a w <<< "$want"
+    local i hv wv
+    for i in 0 1 2; do
+        hv="${h[$i]:-0}"
+        wv="${w[$i]:-0}"
+        if ((10#$hv > 10#$wv)); then return 0; fi
+        if ((10#$hv < 10#$wv)); then return 1; fi
+    done
+    return 0
+}
+
+# Returns 0 when the cached runtime in $GIIL_HOME must be (re)installed: no
+# install stamp, no Playwright package, or a stamp from different pins.
+runtime_needs_install() {
+    local lock_file="$1" modules_dir="$2" spec="$3"
+    [[ -f "$lock_file" ]] || return 0
+    [[ -d "$modules_dir/playwright" ]] || return 0
+    local recorded=""
+    recorded=$(head -n 1 "$lock_file" 2>/dev/null || true)
+    [[ "$recorded" == "$spec" ]] || return 0
+    return 1
 }
 
 ensure_playwright() {
@@ -1078,8 +1124,11 @@ ensure_playwright() {
 
     # Check if we need to install or update
     local needs_install=false
-    if [[ ! -f "$lock_file" ]] || [[ ! -d "${GIIL_HOME}/node_modules/playwright" ]]; then
+    if runtime_needs_install "$lock_file" "${GIIL_HOME}/node_modules" "$GIIL_RUNTIME_SPEC"; then
         needs_install=true
+        if [[ -f "$lock_file" ]]; then
+            log_info "Updating cached runtime to ${GIIL_RUNTIME_SPEC}..."
+        fi
     fi
     if [[ "$FORCE_UPDATE" == "true" ]]; then
         needs_install=true
@@ -1112,33 +1161,39 @@ ensure_playwright() {
         echo "" >&2
 
         # Create package.json with all dependencies
-        cat > "$package_json" << 'PACKAGE_EOF'
+        cat > "$package_json" << PACKAGE_EOF
 {
   "name": "giil-runtime",
-  "version": "3.0.0",
+  "version": "${VERSION}",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=${GIIL_MIN_NODE_VERSION}"
+  },
   "dependencies": {
-    "playwright": "1.40.0",
-    "sharp": "0.33.0",
-    "exifr": "7.1.3"
+    "playwright": "${GIIL_PLAYWRIGHT_VERSION}",
+    "sharp": "${GIIL_SHARP_VERSION}",
+    "exifr": "${GIIL_EXIFR_VERSION}"
   }
 }
 PACKAGE_EOF
 
         cd "$GIIL_HOME"
+        # All installer output goes to stderr: stdout is reserved for the
+        # result (path, base64, JSON, or TOON), including on the first run.
         if [[ "$GUM_AVAILABLE" == "true" ]]; then
             gum spin --spinner dot --title "Installing npm packages..." -- \
-                npm install --silent --no-fund --no-audit --include=optional 2>/dev/null || \
+                npm install --silent --no-fund --no-audit --include=optional >&2 2>/dev/null || \
                 npm install --no-fund --no-audit --include=optional >&2
         else
             log_step "Installing npm packages..."
-            npm install --silent --no-fund --no-audit --include=optional 2>/dev/null || \
+            npm install --silent --no-fund --no-audit --include=optional >&2 2>/dev/null || \
                 npm install --no-fund --no-audit --include=optional >&2
         fi
 
-        # Verify sharp runtime is usable; install platform-specific prebuilds if needed.
-        if ! node -e "require('sharp')" >/dev/null 2>&1; then
+        # Verify sharp ESM runtime is usable (matches extractor.mjs); install
+        # platform-specific prebuilds if needed.
+        if ! node --input-type=module -e "import 'sharp'" >/dev/null 2>&1; then
             log_warn "Sharp runtime missing; attempting platform-specific install..."
             local os
             os=$(detect_os)
@@ -1189,7 +1244,7 @@ PACKAGE_EOF
                 log_warn "No prebuilt sharp packages available for ${os}/${arch}"
             fi
 
-            if ! node -e "require('sharp')" >/dev/null 2>&1; then
+            if ! node --input-type=module -e "import 'sharp'" >/dev/null 2>&1; then
                 log_error "Sharp failed to install. Try reinstalling dependencies or set GIIL_HOME to a writable path."
                 exit "$EXIT_DEPENDENCY_ERROR"
             fi
@@ -1199,7 +1254,7 @@ PACKAGE_EOF
         local chromium_installed=false
         if [[ "$GUM_AVAILABLE" == "true" ]]; then
             if gum spin --spinner dot --title "Installing Chromium browser (~150MB)..." -- \
-                npx playwright install chromium 2>/dev/null; then
+                npx playwright install chromium >&2 2>/dev/null; then
                 chromium_installed=true
             fi
         else
@@ -1232,7 +1287,7 @@ PACKAGE_EOF
             fi
         fi
 
-        touch "$lock_file"
+        printf '%s\n' "$GIIL_RUNTIME_SPEC" > "$lock_file"
         log_info "Setup complete!"
     fi
 
@@ -2509,6 +2564,57 @@ async function captureSinglePhoto(ctx, page, context, options, imageCapture = nu
 }
 
 // Create a response handler for capturing images during page load
+const ICLOUD_SHARE_RESOLVE_RE = /^https:\/\/ckdatabasews\.icloud\.com\/database\/1\/com\.apple\.photos\.cloud\/production\/public\/records\/resolve(?:[?#]|$)/;
+const ICLOUD_APP_ASSET_RE = /^https:\/\/www\.icloud\.com\/(?:applications|system)\//;
+
+/**
+ * Classify iCloud's public share resolver payload (records/resolve). Returns
+ * null when at least one requested share resolved (or the payload is not a
+ * resolver result), otherwise an error descriptor with a giil exit code.
+ * Language-independent: uses serverErrorCode, not the rendered page text.
+ * @param {any} payload - Parsed JSON body of the resolve response
+ * @returns {{code: string, exitCode: number, serverErrorCode: string, reason: string, message: string}|null}
+ */
+function classifyIcloudResolveResponse(payload) {
+    const results = payload && Array.isArray(payload.results) ? payload.results : [];
+    if (results.length === 0) return null;
+    const failed = results.filter((r) => r && typeof r.serverErrorCode === 'string' && r.serverErrorCode !== '');
+    if (failed.length !== results.length) return null;
+
+    const first = failed[0];
+    const serverErrorCode = first.serverErrorCode.toUpperCase();
+    const reason = typeof first.reason === 'string' && first.reason ? first.reason : serverErrorCode;
+    const authCodes = ['ACCESS_DENIED', 'AUTHENTICATION_FAILED', 'AUTHENTICATION_REQUIRED', 'PERMISSION_FAILURE'];
+    const notFoundCodes = ['NOT_FOUND', 'ZONE_NOT_FOUND'];
+
+    if (first.requireAppleLogin === true || authCodes.includes(serverErrorCode)) {
+        return {
+            code: 'AUTH_REQUIRED',
+            exitCode: ExitCodes.AUTH_REQUIRED,
+            serverErrorCode,
+            reason,
+            message: `iCloud shared link requires sign-in or permission (${reason}).`
+        };
+    }
+    if (notFoundCodes.includes(serverErrorCode)) {
+        return {
+            code: 'NOT_FOUND',
+            exitCode: ExitCodes.NOT_FOUND,
+            serverErrorCode,
+            reason,
+            message: `iCloud shared link not found (${reason}). The owner stopped sharing, the link expired, or it is invalid.`
+        };
+    }
+    return null;
+}
+
+function icloudShareErrorToError(status) {
+    const err = new Error(status.message);
+    err.code = status.code;
+    err.exitCode = status.exitCode;
+    return err;
+}
+
 function createImageCaptureHandler(debugMode) {
     const capture = {
         buffer: null,
@@ -2542,6 +2648,31 @@ function createImageCaptureHandler(debugMode) {
             // Platform-specific CDN detection
             const isIcloudCdn = respUrl.includes('cvws.icloud-content.com') ||
                                respUrl.includes('icloud-content.com');
+
+            // iCloud share resolver: reports expired/revoked/invalid links that
+            // still render a page (which must not be screenshotted as success).
+            if (ICLOUD_SHARE_RESOLVE_RE.test(respUrl)) {
+                try {
+                    const status = classifyIcloudResolveResponse(await response.json());
+                    if (status) {
+                        capture.icloudShareError = status;
+                        if (debugMode) {
+                            console.error(`[giil:debug] iCloud share resolver: ${status.serverErrorCode} (${status.reason})`);
+                        }
+                    } else {
+                        capture.icloudShareResolved = true;
+                    }
+                } catch (e) {
+                    // Unparseable resolver payload: keep the existing capture flow.
+                }
+                return;
+            }
+
+            // iCloud web-app chrome (logos, wallpaper, feature-probe test images)
+            // is never shared content; user media comes from icloud-content.com.
+            if (ICLOUD_APP_ASSET_RE.test(respUrl)) {
+                return;
+            }
             const isGooglePhotosCdn = respUrl.includes('lh3.googleusercontent.com/pw/') ||
                                       respUrl.includes('googleusercontent.com/');
             const isImage = contentType.startsWith('image/');
@@ -2679,6 +2810,13 @@ async function extractImage(ctx, browser) {
         await page.waitForLoadState('networkidle', { timeout: settleTimeout }).catch(() => {});
         await sleep(1000);
         verbose(ctx, 'Page load complete, network idle');
+
+        // iCloud renders an "unavailable" page for expired, revoked, or invalid
+        // links; without this check the screenshot fallback saves that page
+        // and reports success. Fail with the documented exit code instead.
+        if (currentPlatform === 'icloud' && imageCapture.icloudShareError) {
+            throw icloudShareErrorToError(imageCapture.icloudShareError);
+        }
 
         // --print-url mode: extract and output URL, don't download
         if (printUrlMode) {
@@ -3357,6 +3495,46 @@ parse_args() {
 # Dropbox provides full-resolution images via raw=1 parameter.
 # This is FASTER and BETTER quality than Playwright (which only gets previews).
 
+# Detect MIME type of a downloaded file without relying solely on `file(1)`,
+# which is often absent in minimal Linux containers. Checks image magic bytes
+# first, then leading HTML/XML markers, then falls back to `file --mime-type`.
+detect_file_mime_type() {
+    local path="$1"
+    [[ -f "$path" && -s "$path" ]] || { echo "application/octet-stream"; return 0; }
+
+    local hex=""
+    hex=$(od -An -tx1 -N 16 "$path" 2>/dev/null | tr -d ' \t\r\n' || true)
+    case "$hex" in
+        89504e470d0a1a0a*) echo "image/png"; return 0 ;;
+        ffd8ff*)           echo "image/jpeg"; return 0 ;;
+        474946383761*|474946383961*) echo "image/gif"; return 0 ;;
+        52494646????????57454250*)   echo "image/webp"; return 0 ;;
+    esac
+    # ISO BMFF ftyp box at byte offset 4: HEIC/HEIF/AVIF brands
+    if [[ "${hex:8:8}" == "66747970" ]]; then
+        case "${hex:16:8}" in
+            68656963|68656978|6865696d|68656973|68656966|6d696631|6d736631|68657663|68657678|6865766d|68657673)
+                echo "image/heic"; return 0 ;;
+            61766966|61766973)
+                echo "image/avif"; return 0 ;;
+        esac
+    fi
+
+    # Check leading bytes for HTML/XML error pages (e.g. Dropbox 200 HTML pages).
+    local head_snip=""
+    head_snip=$(head -c 512 "$path" 2>/dev/null | tr '\r\n\t' '   ' | sed 's/^ *//' | tr '[:upper:]' '[:lower:]' || true)
+    case "$head_snip" in
+        "<!doctype html"*|"<html"*|"<?xml"*|"<head"*|"<body"*|"<script"*)
+            echo "text/html"; return 0 ;;
+    esac
+
+    if command -v file >/dev/null 2>&1; then
+        file --mime-type -b "$path" 2>/dev/null || echo "unknown"
+    else
+        echo "unknown"
+    fi
+}
+
 download_dropbox_direct() {
     # Normalize URL to direct download format
     local raw_url
@@ -3401,11 +3579,13 @@ download_dropbox_direct() {
         fi
     fi
 
-    # Validate content is actually an image (not HTML error page)
+    # Detect MIME type using magic bytes + HTML header inspection first so
+    # minimal Linux containers without `file(1)` still reject HTML error pages
+    # and assign accurate extensions.
     local content_type
-    content_type=$(file --mime-type -b "$output_path" 2>/dev/null || echo "unknown")
+    content_type=$(detect_file_mime_type "$output_path")
 
-    if [[ "$content_type" == "text/html" || "$content_type" == "text/plain" ]]; then
+    if [[ "$content_type" == "text/html" || "$content_type" == "text/plain" || "$content_type" == "application/xhtml+xml" ]]; then
         log_error "Received HTML instead of image."
         log_error "The link may be password-protected, expired, or deleted."
         rm -f "$output_path"
@@ -3419,8 +3599,14 @@ download_dropbox_direct() {
         image/gif) ext="gif" ;;
         image/webp) ext="webp" ;;
         image/heic|image/heif) ext="heic" ;;
+        image/avif) ext="avif" ;;
     esac
     final_path="${OUTPUT_DIR}/dropbox_${timestamp}.${ext}"
+    local suffix=1
+    while [[ -e "$final_path" ]]; do
+        final_path="${OUTPUT_DIR}/dropbox_${timestamp}_${suffix}.${ext}"
+        suffix=$((suffix + 1))
+    done
 
     # Move to final path
     mv "$output_path" "$final_path"
@@ -3523,21 +3709,24 @@ main() {
     # download_dropbox_direct reads the global URL and calls `exit` on success,
     # so for >1 total URL run it in a subshell to survive that exit (matches the
     # prior multi-URL behavior). For a lone Dropbox URL keep the direct exit.
+    # Guard empty array expansion for Bash 4.0-4.3 under `set -u`.
     local _dbx_index=0 _failure=0 _rc=0
-    for URL in "${_dropbox_urls[@]}"; do
-        _dbx_index=$((_dbx_index + 1))
-        if [[ $_giil_url_total -gt 1 ]]; then
-            log_info "Dropbox URL $_dbx_index of ${#_dropbox_urls[@]} (direct download)"
-            _rc=0
-            ( download_dropbox_direct ) || _rc=$?
-            if [[ $_rc -ne 0 ]]; then
-                log_warn "Dropbox URL $_dbx_index failed (exit $_rc)"
-                [[ $_rc -le $_failure ]] || _failure=$_rc
+    if [[ ${#_dropbox_urls[@]} -gt 0 ]]; then
+        for URL in "${_dropbox_urls[@]}"; do
+            _dbx_index=$((_dbx_index + 1))
+            if [[ $_giil_url_total -gt 1 ]]; then
+                log_info "Dropbox URL $_dbx_index of ${#_dropbox_urls[@]} (direct download)"
+                _rc=0
+                ( download_dropbox_direct ) || _rc=$?
+                if [[ $_rc -ne 0 ]]; then
+                    log_warn "Dropbox URL $_dbx_index failed (exit $_rc)"
+                    [[ $_rc -le $_failure ]] || _failure=$_rc
+                fi
+            else
+                download_dropbox_direct
             fi
-        else
-            download_dropbox_direct
-        fi
-    done
+        done
+    fi
 
     # ---- Playwright URLs: single browser, multi-tab batch (issue #4) ----
     if [[ ${#_pw_urls[@]} -gt 0 ]]; then

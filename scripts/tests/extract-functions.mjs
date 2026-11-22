@@ -82,6 +82,11 @@ const extractors = [
 
     // getExifDateTime function (async, uses exifr)
     { name: 'getExifDateTime', pattern: /async function getExifDateTime\(buffer\) \{[\s\S]*?^\}/m },
+
+    // iCloud share resolver classification (expired/revoked/invalid links)
+    { name: 'ICLOUD_SHARE_RESOLVE_RE', pattern: /^const ICLOUD_SHARE_RESOLVE_RE = .*;$/m },
+    { name: 'ICLOUD_APP_ASSET_RE', pattern: /^const ICLOUD_APP_ASSET_RE = .*;$/m },
+    { name: 'classifyIcloudResolveResponse', pattern: /function classifyIcloudResolveResponse\(payload\) \{[\s\S]*?^\}/m },
 ];
 
 // Build the output module - track which functions were extracted
